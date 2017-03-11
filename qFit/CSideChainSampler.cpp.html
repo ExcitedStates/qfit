@@ -1,0 +1,1828 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>~/SVN/qfit/trunk/qFit/src/CSideChainSampler.cpp.html</title>
+<meta name="Generator" content="Vim/8.0">
+<meta name="plugin-version" content="vim7.4_v2">
+<meta name="syntax" content="cpp">
+<meta name="settings" content="use_css,pre_wrap,no_foldcolumn,expand_tabs,prevent_copy=">
+<meta name="colorscheme" content="none">
+<style type="text/css">
+<!--
+pre { white-space: pre-wrap; font-family: monospace; color: #000000; background-color: #ffffff; }
+body { font-family: monospace; color: #000000; background-color: #ffffff; }
+* { font-size: 1em; }
+.Error { color: #ffffff; background-color: #ff6060; padding-bottom: 1px; }
+.Type { color: #008000; }
+.Comment { color: #0000c0; }
+.Constant { color: #c00000; }
+.Special { color: #c000c0; }
+.Statement { color: #af5f00; }
+.PreProc { color: #c000c0; }
+-->
+</style>
+
+<script type='text/javascript'>
+<!--
+
+-->
+</script>
+</head>
+<body>
+<pre id='vimCodeElement'>
+<span class="Comment">/*</span>
+<span class="Comment">    qFit: Multiconformer modeling by constrained fitting of rotamer occupancies</span>
+<span class="Comment">    Henry van den Bedem, Ankur Dhanik, Jean-Claude Latombe, Ashley Deacon. Acta Cryst. D65:1107–1117 (2009)</span>
+<span class="Comment">    e-mail: vdbedem@slac.stanford.edu</span>
+
+<span class="Comment">        Copyright (C) 2009-2012 Stanford University</span>
+
+<span class="Comment">        Permission is hereby granted, free of charge, to any person obtaining a copy of</span>
+<span class="Comment">        this software and associated documentation files (the &quot;Software&quot;), to deal in</span>
+<span class="Comment">        the Software without restriction, including without limitation the rights to</span>
+<span class="Comment">        use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies</span>
+<span class="Comment">        of the Software, and to permit persons to whom the Software is furnished to do</span>
+<span class="Comment">        so, subject to the following conditions: </span>
+
+<span class="Comment">        This entire text, including the above copyright notice and this permission notice</span>
+<span class="Comment">        shall be included in all copies or substantial portions of the Software. </span>
+
+<span class="Comment">        THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR</span>
+<span class="Comment">        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,</span>
+<span class="Comment">        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE</span>
+<span class="Comment">        AUTHORS, CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR</span>
+<span class="Comment">        OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING</span>
+<span class="Comment">        FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS</span>
+<span class="Comment">        IN THE SOFTWARE.</span>
+
+<span class="Comment">    </span>
+<span class="Comment">*/</span>
+
+
+<span class="PreProc">#ifndef CSIDECHAINSAMPLER_H_</span>
+<span class="PreProc">#include </span><span class="Constant">&quot;CSideChainSampler.h&quot;</span>
+<span class="PreProc">#endif</span>
+
+
+<span class="PreProc">#define B2U </span><span class="Constant">78.9568</span>
+
+<span class="Type">struct</span> MyRotater: AtomFunctor {
+<span class="Statement">public</span>:
+  MyRotater(Vector3 orig, Vector3 axis, <span class="Type">float</span> degrees) {
+    rotMat = PMath::FindRotationMatrix(axis, DtoR(degrees));
+    origin = orig;
+  }
+
+  <span class="Type">void</span> <span class="Statement">operator</span>()(PAtom *atom, PBond *bondFrom) {
+    Vector3 currPos = atom-&gt;getPos()-origin;
+    <span class="Comment">//cout&lt;&lt;atom-&gt;getPos()&lt;&lt;endl;</span>
+    atom-&gt;changePosition(rotMat*currPos+origin);
+<span class="Comment">//    cout&lt;&lt;atom-&gt;getPos()&lt;&lt;endl&lt;&lt;endl;</span>
+  }
+
+<span class="Statement">private</span>:
+  Matrix3 rotMat;
+  Vector3 origin;
+};
+
+<span class="Type">struct</span> MyTSetter : AtomFunctor
+{
+<span class="Statement">public</span>:
+  MyTSetter ( Real tempfactor ) : TempFactor (  tempfactor ) {}
+
+  <span class="Type">void</span> <span class="Statement">operator</span>()(PAtom *atom, PBond *bondFrom)
+  {
+    atom-&gt;setTempFactor(TempFactor);
+  }
+
+<span class="Statement">private</span>:
+  Real TempFactor;
+};
+
+<span class="Type">template</span>&lt;<span class="Type">class</span> T, <span class="Type">class</span> U&gt; <span class="Type">struct</span> ComparePair1stDsc
+{
+  <span class="Type">bool</span> <span class="Statement">operator</span>()( <span class="Type">const</span> std::pair&lt;T,U&gt;&amp; a, <span class="Type">const</span> std::pair&lt;T,U&gt;&amp; b ) <span class="Type">const</span>
+  {
+    <span class="Statement">return</span> a.first &gt; b.first;
+  }
+};
+
+<span class="Type">void</span> leftouter_product ( <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; U, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; V,
+                    std::vector&lt;<span class="Type">double</span>&gt;&amp;  UxV  )
+{
+  UxV[<span class="Constant">0</span>] = V[<span class="Constant">1</span>]*U[<span class="Constant">2</span>] - U[<span class="Constant">1</span>]*V[<span class="Constant">2</span>];
+  UxV[<span class="Constant">1</span>] = V[<span class="Constant">2</span>]*U[<span class="Constant">0</span>] - U[<span class="Constant">2</span>]*V[<span class="Constant">0</span>];
+  UxV[<span class="Constant">2</span>] = V[<span class="Constant">0</span>]*U[<span class="Constant">1</span>] - U[<span class="Constant">0</span>]*V[<span class="Constant">1</span>];
+}
+
+<span class="Type">void</span> normalize3D ( std::vector&lt;<span class="Type">double</span>&gt;&amp; U, <span class="Type">double</span>&amp; _l )
+{
+  _l = sqrt ( U[<span class="Constant">0</span>]*U[<span class="Constant">0</span>]+U[<span class="Constant">1</span>]*U[<span class="Constant">1</span>]+U[<span class="Constant">2</span>]*U[<span class="Constant">2</span>] );
+  <span class="Statement">if</span> ( _l &gt; <span class="Constant">0</span> )
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;U.size(); ++i )
+    U[i] /= _l;
+}
+
+<span class="Type">bool</span> WritePDB ( <span class="Type">const</span> PCChain pChain, <span class="Type">const</span> std::string fn )
+{
+  CFile f;
+  <span class="Type">bool</span> success = <span class="Constant">false</span>;
+  f.assign ( <span class="Statement">const_cast</span>&lt;<span class="Type">char</span>*&gt;(fn.c_str()), <span class="Constant">true</span>, <span class="Constant">false</span>, GZM_CHECK );
+  <span class="Statement">if</span> ( ( success = f.rewrite() ) )
+  {
+    pChain-&gt;PDBASCIIAtomDump ( f );
+    f.WriteLine ( pstr(<span class="Constant">&quot;END&quot;</span>) );
+    f.shut();
+  }
+  <span class="Statement">else</span>
+    cout &lt;&lt; <span class="Constant">&quot;Error: Can not open file &quot;</span> &lt;&lt; fn &lt;&lt; <span class="Constant">&quot; for writing.&quot;</span> &lt;&lt; endl;
+  <span class="Statement">return</span> success;
+}
+
+CSideChainSampler::CSideChainSampler()
+{
+}
+
+<span class="Type">void</span> CSideChainSampler::Init ( std::string inpdb, std::string inmtz, <span class="Type">const</span> std::string ChnID, <span class="Type">const</span> <span class="Type">int</span> seqnum, <span class="Type">const</span> <span class="Type">bool</span> fp )
+{
+  clipper::Atom_list allatm_lst;
+  clipper::ftype32 mean, sigsig;
+
+  clipper::Xmap&lt;<span class="Type">float</span>&gt; xmap;
+  clipper::HKL_info hkl_info;
+
+  <span class="Type">int</span> RC = myCMMDBManager.ReadPDBASCII ( <span class="Statement">const_cast</span>&lt;<span class="Type">char</span>*&gt;( inpdb.c_str() ) );
+
+  flip_peptide = fp;
+
+<span class="Comment">//  clipper::CCP4MAPfile mapin;</span>
+<span class="Comment">//  mapin.open_read(inmap.c_str());</span>
+<span class="Comment">//  mapin.import_xmap(xmap);</span>
+<span class="Comment">//  mapin.close_read();</span>
+
+  srand ( <span class="Constant">100</span> );
+
+  <span class="Comment">// get a list of all the atoms</span>
+  clipper::mmdb::PPCAtom psel;
+  <span class="Type">int</span> hndl, nsel;
+  hndl = myCMMDBManager.NewSelection();
+  myCMMDBManager.SelectAtoms( hndl, <span class="Constant">0</span>, <span class="Constant">0</span>, SKEY_NEW );
+  myCMMDBManager.SelectAtoms ( hndl,<span class="Constant">0</span>,
+     (pstr)ChnID.c_str(),
+     seqnum,<span class="Constant">&quot;*&quot;</span>,
+     seqnum,<span class="Constant">&quot;*&quot;</span>,
+     <span class="Constant">&quot;*&quot;</span>, <span class="Constant">&quot;!N,CA,C&quot;</span>, <span class="Constant">&quot;*&quot;</span>, <span class="Constant">&quot;*&quot;</span>, SKEY_XOR );
+
+  myCMMDBManager.GetSelIndex( hndl, psel, nsel );
+  allatm_lst = clipper::MMDBAtom_list ( psel, nsel );
+  myCMMDBManager.DeleteSelection( hndl );
+
+  std::cout &lt;&lt; <span class="Constant">&quot;Atom list size: &quot;</span> &lt;&lt; allatm_lst.size() &lt;&lt; std::endl;
+
+  PScaleXMap mPScaleXMap;
+  mPScaleXMap.DoScaleXMap ( xmap, hkl_info, inmtz, allatm_lst, mean, sigsig );
+<span class="Comment">//  std::cout &lt;&lt; &quot;Resolution range: &quot; &lt;&lt; 1/sqrt(hkl_info.invresolsq_range ().max()) &lt;&lt; &quot;A - &quot; &lt;&lt; 1/sqrt(hkl_info.invresolsq_range ().min()) &lt;&lt; &quot;A&quot; &lt;&lt; std::endl;</span>
+
+<span class="Comment">//  clipper::CCP4MAPfile mapout;</span>
+<span class="Comment">//  mapout.open_write( &quot;scaled.map&quot;);</span>
+<span class="Comment">//  mapout.export_xmap(xmap);</span>
+<span class="Comment">//  mapout.close_write();</span>
+
+  Metric_tensor_direct = hkl_info.cell().metric_real();
+
+<span class="Comment">//  std::cout &lt;&lt; &quot;Metric Tensor: &quot; &lt;&lt; Metric_tensor_direct.format ( ) &lt;&lt; std::endl;</span>
+
+  Metric_tensor_direct2 = hkl_info.cell().matrix_orth().transpose()*hkl_info.cell().matrix_orth();
+<span class="Comment">//  std::cout &lt;&lt; &quot;Metric Tensor (from orthmat): &quot; &lt;&lt; Metric_tensor_direct2.format ( ) &lt;&lt; std::endl;</span>
+  Ueigen = clipper::Matrix&lt;&gt; ( <span class="Constant">3</span>, <span class="Constant">3</span>, <span class="Constant">0.0</span> );
+  mCSolver.Init ( allatm_lst, xmap, hkl_info, mean, sqrt(sigsig) );
+}
+
+CSideChainSampler::~CSideChainSampler()
+{
+}
+
+<span class="Type">void</span> CSideChainSampler::CalcBndvctrRotPlaneIntsct ( std::vector&lt;<span class="Type">double</span>&gt;&amp; intsct, std::vector&lt;<span class="Type">double</span>&gt;&amp; bndvctr,
+      <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; bndtail, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; trmnlatm ) <span class="Type">const</span>
+{
+  std::vector&lt;<span class="Type">double</span>&gt; convctr(<span class="Constant">3</span>);
+  <span class="Type">double</span> t, init0;
+  init0 = <span class="Constant">0</span>;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;trmnlatm.size(); ++i )
+    convctr[i] = trmnlatm[i] - bndtail[i];
+
+  t = std::inner_product (&amp;convctr[<span class="Constant">0</span>], &amp;convctr[<span class="Constant">3</span>], &amp;bndvctr[<span class="Constant">0</span>], init0 ) ;
+  t /= std::inner_product (&amp;bndvctr[<span class="Constant">0</span>], &amp;bndvctr[<span class="Constant">3</span>], &amp;bndvctr[<span class="Constant">0</span>], init0 ) ;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;trmnlatm.size(); ++i )
+    intsct[i] = bndtail[i] + t*bndvctr[i];
+}
+
+<span class="Type">double</span> CSideChainSampler::CalcMinimizingAngle ( std::vector&lt;<span class="Type">double</span>&gt;&amp; bndvctr, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; bndtail,
+                        <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; trmnlatms, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; anchrAtms) <span class="Type">const</span>
+{
+  std::vector&lt;<span class="Type">double</span>&gt; orgn(<span class="Constant">3</span>), anchrvctr(<span class="Constant">3</span>), plnvctr(<span class="Constant">3</span>), rotatm (<span class="Constant">3</span>);
+   std::vector&lt;<span class="Type">double</span>&gt; rhat (<span class="Constant">3</span>), shat(<span class="Constant">3</span>);
+
+  <span class="Type">double</span> b, c, r, init0, l0;
+  init0 = <span class="Constant">0</span>; b = <span class="Constant">0</span>; c = <span class="Constant">0</span>; r = <span class="Constant">0</span>; l0 = <span class="Constant">0</span>;
+  <span class="Statement">for</span> ( std::<span class="Type">size_t</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">1</span>; i++ )
+  {
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">3</span>*i; j&lt;<span class="Constant">3</span>*(i+<span class="Constant">1</span>); ++j )
+      plnvctr[j-<span class="Constant">3</span>*i] = trmnlatms[j];
+    CalcBndvctrRotPlaneIntsct ( orgn, bndvctr, bndtail, plnvctr );
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;<span class="Constant">3</span>; ++j )
+      plnvctr[j] -= orgn[j];
+    leftouter_product ( plnvctr, bndvctr, shat );
+    rhat = plnvctr;
+    normalize3D ( shat, r );
+    normalize3D ( rhat, r );
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">3</span>*i; j&lt;<span class="Constant">3</span>*(i+<span class="Constant">1</span>); ++j )
+      anchrvctr[j-<span class="Constant">3</span>*i] = anchrAtms[j];
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;<span class="Constant">3</span>; ++j )
+      anchrvctr[j] -= orgn[j];
+    b += r* std::inner_product ( &amp;rhat[<span class="Constant">0</span>], &amp;rhat[<span class="Constant">3</span>], &amp;anchrvctr[<span class="Constant">0</span>], init0 );
+    c += r* std::inner_product ( &amp;shat[<span class="Constant">0</span>], &amp;shat[<span class="Constant">3</span>], &amp;anchrvctr[<span class="Constant">0</span>], init0 );
+  }
+  <span class="Statement">return</span> atan2 ( c, b );
+}
+
+<span class="Type">void</span> CSideChainSampler::SetADPAxis_Direct ( <span class="Type">const</span> PCAtom pAtm )
+{
+  clipper::Mat33&lt;&gt; Ustar, U;
+  Ustar ( <span class="Constant">0</span>,<span class="Constant">0</span> ) = pAtm-&gt;u11;
+  Ustar ( <span class="Constant">1</span>,<span class="Constant">1</span> ) = pAtm-&gt;u22;
+  Ustar ( <span class="Constant">2</span>,<span class="Constant">2</span> ) = pAtm-&gt;u33;
+  Ustar ( <span class="Constant">0</span>,<span class="Constant">1</span> ) = Ustar ( <span class="Constant">1</span>,<span class="Constant">0</span> ) = pAtm-&gt;u12;
+  Ustar ( <span class="Constant">0</span>,<span class="Constant">2</span> ) = Ustar ( <span class="Constant">2</span>,<span class="Constant">0</span> ) = pAtm-&gt;u13;
+  Ustar ( <span class="Constant">1</span>,<span class="Constant">2</span> ) = Ustar ( <span class="Constant">2</span>,<span class="Constant">1</span> ) = pAtm-&gt;u23;
+
+  std::cout &lt;&lt; <span class="Constant">&quot;Ustar: &quot;</span> &lt;&lt; Ustar.format ( ) &lt;&lt; std::endl;
+  U = Metric_tensor_direct2 * Ustar * Metric_tensor_direct2;
+  std::cout &lt;&lt; <span class="Constant">&quot;U: &quot;</span> &lt;&lt; U.format ( ) &lt;&lt; std::endl;
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; ++i )
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;<span class="Constant">3</span>; ++j )
+      Ueigen ( i,j ) = Ustar (i, j );
+
+  std::vector&lt;clipper::ftype&gt; evals = Ueigen.eigen ( );
+
+  std::cout &lt;&lt; <span class="Constant">&quot;Ueigen: &quot;</span>;
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; ++i )
+  {
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;<span class="Constant">3</span>; ++j )
+      std::cout &lt;&lt; Ueigen ( i, j ) &lt;&lt; <span class="Constant">&quot; &quot;</span>;
+    std::cout &lt;&lt; std::endl;
+  }
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;evals.size(); ++i )
+    std::cout &lt;&lt; evals[i] &lt;&lt; <span class="Constant">&quot; &quot;</span>;
+  std::cout &lt;&lt; std::endl;
+
+  clipper::Vec3&lt;&gt; ESum;
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; i++ )
+  {
+        ESum[i] = <span class="Constant">0</span>;
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;<span class="Constant">3</span>; j++ )
+      ESum[i] += evals[j]*Ueigen ( i, j );
+  }
+<span class="Comment">//  std::cout &lt;&lt; ESum.format() &lt;&lt; std::endl;</span>
+  EVectorSum = ESum.unit();
+
+<span class="Comment">//  std::cout &lt;&lt; EVectorSum.format() &lt;&lt; std::endl;</span>
+}
+
+<span class="Type">void</span> CSideChainSampler::DoFindConfs ( <span class="Type">const</span> std::string ChnID, <span class="Type">const</span> <span class="Type">int</span> lSeqNum, <span class="Type">const</span> <span class="Type">int</span> hSeqNum )
+{
+<span class="Comment">//  PPCChain pChnTbl;</span>
+<span class="Comment">//  int nChns;</span>
+  PPCAtom pAtmTbl;
+  <span class="Type">int</span> nAtms;
+  <span class="Type">char</span> S[<span class="Constant">128</span>];
+  <span class="Type">bool</span> isSULFUR;
+
+
+  <span class="Comment">//myCMMDBManager.GetChainTable ( 1, pChnTbl, nChns );</span>
+  PCChain pMMDBChn = myCMMDBManager.GetChain ( <span class="Constant">1</span>, ChnID.c_str() );
+
+    <span class="Statement">if</span> ( !pMMDBChn-&gt;isAminoacidChain() )
+    {
+      std::cout &lt;&lt; <span class="Constant">&quot;Not an AA chain.&quot;</span> &lt;&lt; std::endl; <span class="Comment">/*</span><span class="Comment">contains at least one AA</span><span class="Comment">*/</span>
+      exit(<span class="Constant">1</span>);
+    }
+    std::vector&lt;<span class="Type">int</span>&gt; mse;
+    PPCResidue pRsdTbl;
+    <span class="Type">int</span> nRsds;
+    pMMDBChn-&gt;GetResidueTable ( pRsdTbl, nRsds );
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;nRsds; j++ )
+      <span class="Statement">if</span> ( strncmp ( pRsdTbl[j]-&gt;GetResName ( ), <span class="Constant">&quot;MSE&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span> )
+      {
+        pRsdTbl[j]-&gt;SetResName ( <span class="Constant">&quot;MET&quot;</span> );
+        mse.push_back ( j );
+      }
+
+    <span class="Comment">/*</span>
+<span class="Comment">    if ( strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, &quot;&quot; )-&gt;GetResName ( ), &quot;GLY&quot;, 3 ) == 0 )</span>
+<span class="Comment">    {</span>
+<span class="Comment">      PCChain pRefChn = newCChain ( );</span>
+<span class="Comment">      //pRefmdl-&gt;AddChain ( pRefChn );</span>
+<span class="Comment">      pRefChn-&gt;AddResidue ( pMMDBChn-&gt;GetResidue ( lSeqNum, &quot;&quot; ) );</span>
+<span class="Comment">      WritePDB ( pRefChn, &quot;Res.pdb&quot; );</span>
+<span class="Comment">      exit(1);</span>
+<span class="Comment">    }</span>
+<span class="Comment">    </span><span class="Comment">*/</span>
+    <span class="Type">const</span> <span class="Type">bool</span> isGLY = strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( ), <span class="Constant">&quot;GLY&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span>;
+
+
+    std::string ADP_ATOM;
+    <span class="Statement">if</span> ( isGLY )
+    {
+       ADP_ATOM = <span class="Constant">&quot;O&quot;</span>;
+       mCSolver.SetATMS_MC_OFFSET ( <span class="Constant">3</span> );
+    }
+    <span class="Statement">else</span>
+    {
+       ADP_ATOM = <span class="Constant">&quot;CB&quot;</span>;
+       mCSolver.SetATMS_MC_OFFSET ( <span class="Constant">3</span> );
+    }
+
+    SetADPAxis_Direct ( pMMDBChn-&gt;GetAtom ( lSeqNum, <span class="Constant">&quot;&quot;</span>, ADP_ATOM.c_str(), <span class="Constant">NULL</span>, <span class="Constant">NULL</span> ) );
+    CATempFactor = pMMDBChn-&gt;GetAtom ( lSeqNum, <span class="Constant">&quot;&quot;</span>, ADP_ATOM.c_str(), <span class="Constant">NULL</span>, <span class="Constant">NULL</span> )-&gt;tempFactor;
+
+    std::ostringstream oss_seq;
+    oss_seq &lt;&lt; lSeqNum;
+    std::string fn = <span class="Constant">&quot;.chn_&quot;</span>+oss_seq.str()+<span class="Constant">&quot;.pdb&quot;</span>;
+    WritePDB ( pMMDBChn, fn.c_str() );
+    PProtein *pChn = PDBIO::readFromFile( fn );
+    std::vector&lt;clipper::Atom_list&gt; atm_lst;
+
+    pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetAtomTable ( pAtmTbl, nAtms );
+
+    isMSE = strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( ), <span class="Constant">&quot;MET&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span>;
+
+    isSULFUR = ( strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( ), <span class="Constant">&quot;MET&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span> ||
+                 strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( ), <span class="Constant">&quot;MSE&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span> ||
+                 strncmp ( pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( ), <span class="Constant">&quot;CYS&quot;</span>, <span class="Constant">3</span> ) == <span class="Constant">0</span> );
+
+    <span class="Statement">if</span> ( flip_peptide )
+      std::cout &lt;&lt; <span class="Constant">&quot;flip_peptide = true&quot;</span> &lt;&lt; std::endl;
+    <span class="Statement">else</span>
+      std::cout &lt;&lt; <span class="Constant">&quot;flip_peptide = false&quot;</span> &lt;&lt; std::endl;
+
+    resnum = pMMDBChn-&gt;GetResidueNo ( lSeqNum, <span class="Constant">&quot;&quot;</span> );
+    std::cout &lt;&lt; <span class="Constant">&quot;resnum &quot;</span> &lt;&lt; resnum &lt;&lt; std::endl;
+
+    GetAtomIDs ( pChn-&gt;getResidue ( resnum ) );
+
+    std::vector&lt;<span class="Type">double</span>&gt; occ;
+
+    vector&lt;PAtom*&gt; vResAtms = *(pChn-&gt;getResidue ( resnum )-&gt;getAtoms());
+
+    <span class="Type">double</span> a = <span class="Constant">0.2</span>;
+    <span class="Statement">if</span> ( <span class="Constant">1.4</span> &lt; mCSolver.RSLN &amp;&amp; mCSolver.RSLN &lt;= <span class="Constant">1.6</span> )
+      a = <span class="Constant">0.25</span>;
+    <span class="Statement">else</span> <span class="Statement">if</span> ( <span class="Constant">1.6</span> &lt; mCSolver.RSLN &amp;&amp; mCSolver.RSLN &lt;= <span class="Constant">1.9</span> )
+      a = <span class="Constant">0.33</span>;
+    <span class="Statement">else</span> <span class="Statement">if</span> ( <span class="Constant">1.9</span> &lt; mCSolver.RSLN )
+      a = <span class="Constant">0.34</span>;
+    <span class="Comment">//a += 0.05;</span>
+
+    MC_AMPL = <span class="Constant">0.20</span>;
+    MC_SIG = <span class="Constant">0.125</span>;
+    gSAMPLE_SIZE = <span class="Constant">13</span>;
+
+    <span class="Type">bool</span> occfromfile = <span class="Constant">false</span>;
+    std::ifstream occfile(<span class="Constant">&quot;minocc.txt&quot;</span>);
+    <span class="Type">double</span> b = <span class="Constant">0</span>;
+    <span class="Statement">if</span> ( occfile.is_open() )
+    {
+       occfile &gt;&gt; b &gt;&gt; MC_AMPL &gt;&gt; MC_SIG &gt;&gt; gSAMPLE_SIZE;
+     <span class="Comment">//  occfromfile = true;</span>
+    }
+
+    std::cout &lt;&lt; <span class="Constant">&quot;occupancy MC_AMPL MCSIG: &quot;</span> &lt;&lt; a &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; MC_AMPL &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; MC_SIG &lt;&lt; std::endl;
+
+    mCSolver.SetMILPThreshold ( a );
+    <span class="Type">const</span> <span class="Type">bool</span> isLong_Ring = ( isLongSC ( pChn-&gt;getResidue ( resnum ) ) || isRing ( pChn-&gt;getResidue ( resnum ) ) );
+    <span class="Statement">if</span> ( isLong_Ring )
+    {
+      <span class="Comment">/*</span><span class="Comment">long sc</span><span class="Comment">*/</span>
+      PProtein *pChnSmall = <span class="Statement">new</span> PProtein ( pChn, resnum - <span class="Constant">3</span>, resnum + <span class="Constant">3</span> );
+      <span class="Type">unsigned</span> chiMax = PResources::numChiIndices(pChn-&gt;getResidue ( resnum )-&gt;getName());
+      std::cout &lt;&lt; <span class="Constant">&quot;chiMax: &quot;</span> &lt;&lt; chiMax &lt;&lt; std::endl;
+
+      SampleCB_MC_AtChi ( pChnSmall-&gt;getResidue ( <span class="Constant">3</span> ), atm_lst );
+
+      <span class="Statement">for</span> ( <span class="Type">int</span> k=<span class="Constant">1</span>; k&lt;chiMax; k++ )
+      {
+        <span class="Comment">/*</span><span class="Comment">Select correct number of atoms to include for this chi angle</span><span class="Comment">*/</span>
+        occ.clear();
+
+        vector&lt;string&gt; rotList = PResources::GetChiIndex(pChnSmall-&gt;getResidue ( <span class="Constant">3</span> )-&gt;getName(), k+<span class="Constant">1</span> );
+        std::string atm_name = rotList[<span class="Constant">2</span>] == <span class="Constant">&quot;SD&quot;</span> ? <span class="Constant">&quot;SE&quot;</span> : rotList[<span class="Constant">2</span>];
+
+        <span class="Statement">if</span> ( pChnSmall-&gt;getResidue ( <span class="Constant">3</span> )-&gt;getName() == PID::PHE || pChnSmall-&gt;getResidue ( <span class="Constant">3</span> )-&gt;getName() == PID::TYR  )
+          atm_name = <span class="Constant">&quot;CZ&quot;</span>;
+        std::vector&lt;std::string&gt;::iterator atm_ids_iter = std::find ( atm_ids.begin(), atm_ids.end(), atm_name );
+
+        <span class="Statement">if</span> ( atm_ids_iter == atm_ids.end() )
+        {
+          std::cout &lt;&lt; <span class="Constant">&quot;ERROR: Atom not found&quot;</span> &lt;&lt; std::endl;
+          exit (<span class="Constant">1</span> );
+        }
+
+        <span class="Type">size_t</span> NChiAtms = atm_ids_iter - atm_ids.begin();
+<span class="Comment">//        if (flip_peptide)</span>
+<span class="Comment">//            NChiAtms++;</span>
+
+        std::cout &lt;&lt; <span class="Constant">&quot;Looked for: &quot;</span> &lt;&lt; atm_name &lt;&lt; std::endl;
+        std::cout &lt;&lt; <span class="Constant">&quot;NChiAtms: &quot;</span> &lt;&lt; NChiAtms &lt;&lt; std::endl;
+
+        std::cout &lt;&lt; <span class="Constant">&quot;Conformers to estimate: &quot;</span> &lt;&lt; atm_lst.size() &lt;&lt; std::endl;
+
+        mCSolver.SetATMS_SIZE ( NChiAtms + <span class="Constant">1</span> );
+
+        mCSolver.CreateMaskMap ( atm_lst );
+
+
+        std::vector&lt;<span class="Type">int</span>&gt; ch ( atm_lst.size() );
+        occ = mCSolver.SetupLPandSolve( atm_lst, ch );
+
+        std::vector&lt;<span class="Type">double</span>&gt; occtmp;
+        std::vector&lt;clipper::Atom_list&gt; atm_lst_;
+        <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;occ.size(); ++j )
+          <span class="Statement">if</span> ( occ[j] &gt; <span class="Constant">0.05</span> ) {
+            atm_lst_.push_back ( atm_lst[j] );
+            occtmp.push_back(occ[j]);
+          }
+        occ.clear();
+                atm_lst.clear();
+        <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;atm_lst_.size(); ++j ) {
+          atm_lst.push_back ( atm_lst_[j] );
+          occ.push_back(occtmp[j]);
+        }
+<span class="Comment">//         srand (time(NULL));</span>
+<span class="Comment">//        for ( int j=0; j&lt;atm_lst.size(); ++j ) {</span>
+<span class="Comment">//            SetAtoms(pChnSmall-&gt;getResidue ( 3 ), atm_lst[j]);</span>
+<span class="Comment">//        }</span>
+        Sample_NextChi ( pChnSmall-&gt;getResidue ( <span class="Constant">3</span> ), k+<span class="Constant">1</span>, occ, atm_lst );
+      }
+      pChnSmall-&gt;Obliterate();
+    }
+    <span class="Statement">else</span>
+    {
+
+      <span class="Comment">//SampleCB_MC ( pChn-&gt;getResidue ( resnum ), atm_lst );</span>
+      <span class="Comment">/*</span><span class="Comment"> New Below </span><span class="Comment">*/</span>
+
+      PProtein *pChnSmall = <span class="Statement">new</span> PProtein ( pChn, resnum - <span class="Constant">3</span>, resnum + <span class="Constant">3</span> );
+      SampleCB_MC ( pChnSmall-&gt;getResidue ( <span class="Constant">3</span> ), atm_lst );
+
+<span class="Comment">//      /* For MC fitting, O and CB, except for GLY--O only*/</span>
+<span class="Comment">//      size_t NChiAtms = ( isGLY ) ? 3 : 4;</span>
+<span class="Comment">//      mCSolver.SetATMS_SIZE ( NChiAtms+1 );</span>
+
+<span class="Comment">//      mCSolver.CreateMaskMap ( atm_lst );</span>
+<span class="Comment">//      std::cout &lt;&lt; &quot;here: Conformers to estimate: &quot; &lt;&lt; atm_lst.size() &lt;&lt; std::endl;</span>
+
+<span class="Comment">//      std::vector&lt;int&gt; ch ( atm_lst.size() );</span>
+<span class="Comment">//      occ = mCSolver.SetupLPandSolve( atm_lst, ch );</span>
+
+<span class="Comment">//      for ( int kk=0; kk&lt;occ.size();++kk)</span>
+<span class="Comment">//          std::cout &lt;&lt; occ[kk];</span>
+
+<span class="Comment">//      std::vector&lt;double&gt; occtmp;</span>
+<span class="Comment">//      std::vector&lt;clipper::Atom_list&gt; atm_lst_;</span>
+<span class="Comment">//      for ( int j=0; j&lt;occ.size(); ++j )</span>
+<span class="Comment">//       /* if ( occ[j] &gt; 0.05 ) */ {</span>
+<span class="Comment">//          atm_lst_.push_back ( atm_lst[j] );</span>
+<span class="Comment">//          occtmp.push_back(occ[j]);</span>
+<span class="Comment">//        }</span>
+<span class="Comment">//      occ.clear();</span>
+<span class="Comment">//      atm_lst.clear();</span>
+<span class="Comment">//      for ( int j=0; j&lt;atm_lst_.size(); ++j ) {</span>
+<span class="Comment">//        atm_lst.push_back ( atm_lst_[j] );</span>
+<span class="Comment">//        occ.push_back(occtmp[j]);</span>
+<span class="Comment">//      }</span>
+<span class="Comment">//      Sample_OnMC ( pChnSmall-&gt;getResidue ( 3 ),  occ, atm_lst );</span>
+      pChnSmall-&gt;Obliterate();
+    }
+
+    <span class="Statement">if</span> (  mCSolver.RSLN &lt;= <span class="Constant">1.1</span> )
+      a = <span class="Constant">0.201</span>;
+    <span class="Statement">if</span> ( <span class="Constant">1.1</span> &lt; mCSolver.RSLN &amp;&amp; mCSolver.RSLN &lt;= <span class="Constant">1.4</span> )
+      a = <span class="Constant">0.251</span>; <span class="Comment">//0.251</span>
+    <span class="Statement">if</span> ( <span class="Constant">1.4</span> &lt; mCSolver.RSLN &amp;&amp; mCSolver.RSLN &lt;= <span class="Constant">1.6</span> )
+      a = <span class="Constant">0.33</span>; <span class="Comment">//0.33</span>
+    <span class="Statement">else</span> <span class="Statement">if</span> ( <span class="Constant">1.6</span> &lt; mCSolver.RSLN <span class="Comment">/*</span><span class="Comment"> &amp;&amp; mCSolver.RSLN &lt;= 1.9</span><span class="Comment">*/</span> )
+      a = <span class="Constant">0.34</span>; <span class="Comment">//0.34</span>
+    <span class="Statement">if</span> ( !occfromfile <span class="Comment">/*</span><span class="Comment">&amp;&amp; !isGLY </span><span class="Comment">*/</span> )
+      mCSolver.SetMILPThreshold ( a );
+
+    occ.clear();
+    mCSolver.SetATMS_SIZE ( atm_lst[<span class="Constant">0</span>].size ( ) );
+    mCSolver.CreateMaskMap ( atm_lst );
+    std::cout &lt;&lt; <span class="Constant">&quot;SetATMS_SIZE: &quot;</span> &lt;&lt; atm_lst[<span class="Constant">0</span>].size() &lt;&lt; std::endl;
+    std::cout &lt;&lt; <span class="Constant">&quot;Conformers to estimate: &quot;</span> &lt;&lt; atm_lst.size() &lt;&lt; std::endl;
+    std::vector&lt;<span class="Type">int</span>&gt; ch ( atm_lst.size() );
+    occ = mCSolver.SetupLPandSolve( atm_lst, ch, QP );
+
+    mCSolver.GoodnessOfFit ( atm_lst, occ );
+
+    std::vector&lt;clipper::Atom_list&gt; atm_lst_;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;occ.size(); ++j )
+        <span class="Statement">if</span> ( occ[j] &gt; <span class="Constant">0</span> )
+          atm_lst_.push_back ( atm_lst[j] );
+
+
+    mCSolver.CreateMaskMap ( atm_lst_ );
+    std::cout &lt;&lt; <span class="Constant">&quot;Conformers to estimate: &quot;</span> &lt;&lt; atm_lst_.size() &lt;&lt; std::endl;
+    std::vector&lt;<span class="Type">int</span>&gt; cho ( atm_lst_.size() );
+
+    occ.clear();
+    occ = mCSolver.SetupLPandSolve( atm_lst_, cho, MIQP );
+
+    pstr resname = pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> )-&gt;GetResName ( );
+    std::cout &lt;&lt; lSeqNum &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; resname &lt;&lt; std::endl;
+    PCResidue pRsd = pMMDBChn-&gt;GetResidue ( lSeqNum, <span class="Constant">&quot;&quot;</span> );
+    pRsd-&gt;DeleteAllAtoms ( );
+
+    <span class="Comment">//PCResidue pRsd = pMMDBChn-&gt;GetResidueCreate ( resname, lSeqNum, &quot;&quot;, false );</span>
+    <span class="Comment">//if ( !pRsd )</span>
+      <span class="Comment">//std::cout &lt;&lt; &quot;Unable to create residue\n&quot;;</span>
+
+    <span class="Type">const</span> <span class="Type">double</span> LOWOCC = <span class="Constant">0</span>; <span class="Comment">//0.1429*mCSolver.RSLN-0.0857;</span>
+
+    <span class="Type">int</span> NaltLoc=<span class="Constant">0</span>;
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;occ.size(); ++j )
+      <span class="Statement">if</span> ( occ[j] &gt; LOWOCC )
+        NaltLoc++;
+
+    <span class="Statement">if</span> ( NaltLoc == <span class="Constant">0</span> )
+    {
+      std::cout &lt;&lt; <span class="Constant">&quot;Residue &quot;</span> &lt;&lt; lSeqNum &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; resname &lt;&lt; <span class="Constant">&quot; should probably be truncated.&quot;</span> &lt;&lt; std::endl;
+      NaltLoc = <span class="Constant">1</span>;
+      occ[<span class="Constant">0</span>] = a;
+    }
+
+    <span class="Type">const</span> <span class="Type">char</span> altLoc_lst = <span class="Type">char</span>(<span class="Constant">'A'</span> + NaltLoc - <span class="Constant">1</span> );
+
+    <span class="Type">int</span> k=<span class="Constant">0</span>;
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;occ.size(); ++j )
+      <span class="Statement">if</span> ( occ[j] &gt; LOWOCC )
+        SetAtoms ( pRsd, atm_lst_[j], <span class="Type">char</span>(altLoc_lst - k++), occ[j] );
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;mse.size(); ++j)
+      pRsdTbl[mse[j]]-&gt;SetResName ( <span class="Constant">&quot;MSE &quot;</span> );
+
+    <span class="Comment">//pMMDBChn-&gt;AddResidue ( pRsd );</span>
+    myCMMDBManager.FinishStructEdit();
+    myCMMDBManager.PDBCleanup ( PDBCLEAN_ATNAME | PDBCLEAN_INDEX | PDBCLEAN_ALTCODE_STRONG );
+<span class="Comment">//    myCMMDBManager.GetAtomTable ( pAtmTbl, nAtms );</span>
+<span class="Comment">//    for ( int i=0; i&lt;nAtms; i++ )</span>
+<span class="Comment">//      std::cout &lt;&lt; pAtmTbl[i]-&gt;GetAtomID ( S ) &lt;&lt; std::endl;</span>
+
+   std::ofstream occOutFile ( <span class="Constant">&quot;occ.txt&quot;</span> );
+   occOutFile &lt;&lt; lSeqNum &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; resname &lt;&lt; <span class="Constant">&quot; &quot;</span>;
+   <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;occ.size(); ++j )
+     <span class="Statement">if</span> ( occ[j] &gt; LOWOCC )
+       occOutFile &lt;&lt; occ[j] &lt;&lt; <span class="Constant">&quot; &quot;</span>;
+   occOutFile.flush();
+
+   myCMMDBManager.SetFlag (MMDBF_IgnoreDuplSeqNum );
+
+   CMMDBManager mRefmngr;
+   PCModel pRefmdl = newCModel ( );
+   mRefmngr.AddModel ( pRefmdl );
+   PCChain pRefChn = newCChain ( );
+   pRefmdl-&gt;AddChain ( pRefChn );
+   pRefChn-&gt;AddResidue ( pRsd );
+   mRefmngr.FinishStructEdit();
+   WritePDB ( pRefChn, (<span class="Constant">&quot;Res&quot;</span>+oss_seq.str()+<span class="Constant">&quot;.pdb&quot;</span>).c_str());
+
+   pRsd-&gt;DeleteAtom ( <span class="Constant">NULL</span>, <span class="Constant">&quot;H&quot;</span>, <span class="Constant">NULL</span> );
+   myCMMDBManager.FinishStructEdit();
+   myCMMDBManager.WritePDBASCII(<span class="Statement">const_cast</span>&lt;<span class="Type">char</span>*&gt;((<span class="Constant">&quot;Final&quot;</span>+oss_seq.str()+<span class="Constant">&quot;.pdb&quot;</span>).c_str()) );
+   <span class="Comment">/*</span><span class="Comment">pMMDBChn-&gt;GetResidueTable ( pRsdTbl, nRsds );</span>
+<span class="Comment">   for ( int j=0; j&lt;nRsds; j++ )</span>
+<span class="Comment">     if ( pRsdTbl[j] != pRsd )</span>
+<span class="Comment">       pMMDBChn-&gt;DeleteResidue ( j );</span>
+<span class="Comment">   myCMMDBManager.FinishStructEdit();</span>
+<span class="Comment">   WritePDB ( pMMDBChn, (&quot;Res&quot;+oss_seq.str()+&quot;.pdb&quot;).c_str());</span><span class="Comment">*/</span>
+ <span class="Comment">// SamplePsiPhi ( pChnTbl, 1 );</span>
+}
+
+<span class="Type">void</span> CSideChainSampler::CalcConfs ( PProtein* pChn, <span class="Type">const</span> <span class="Type">int</span> start_res_idx, <span class="Type">const</span> <span class="Type">int</span> stop_res_idx )
+{
+  std::vector&lt;clipper::Atom_list&gt; mAtom_list;
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> nres=start_res_idx; nres&lt;=stop_res_idx; nres++ )
+  {
+    PProteinResidue* pPRes_cur = pChn-&gt;getResidue ( nres );
+    GenTrialPositions ( pPRes_cur, mAtom_list );
+    <span class="Comment">//probs=ResolveSC ( map_t, loops, 2*lp_sz-1, 0.1, true );</span>
+  }
+
+<span class="Comment">//  for(int i=0;i&lt;loops.size();i++)</span>
+<span class="Comment">//  {</span>
+<span class="Comment">//    std::ostringstream oss;</span>
+<span class="Comment">//    oss &lt;&lt; i;</span>
+<span class="Comment">//    </span>
+<span class="Comment">//    for(int j=0;j&lt;loops[i]-&gt;size();j++){</span>
+<span class="Comment">//      vector&lt;PAtom*&gt; allatoms = *((loops[i]-&gt;getResidue(j))-&gt;getAtoms());</span>
+<span class="Comment">//      for(int k=0;k&lt;allatoms.size();k++)</span>
+<span class="Comment">//        allatoms[k]-&gt;setOccupancy(probs[i]);</span>
+<span class="Comment">//    }</span>
+<span class="Comment">//</span>
+<span class="Comment">//    PDBIO::writeToFile(loops[i],g_Dir+&quot;Full_final_SC&quot;+oss.str()+&quot;.pdb&quot;);</span>
+<span class="Comment">//  }  </span>
+}
+
+<span class="Type">void</span> CSideChainSampler::GetAtomIDs ( PResidue *res )
+{
+  <span class="Type">const</span> std::string mcAtms[<span class="Constant">4</span>] = {<span class="Constant">&quot;N&quot;</span>, <span class="Constant">&quot;CA&quot;</span>, <span class="Constant">&quot;C&quot;</span>, <span class="Constant">&quot;O&quot;</span>};
+  vector&lt;PAtom*&gt; vResAtms = *(res-&gt;getAtoms());
+  std::string name = res-&gt;getName();
+  atm_ids.clear ( );
+
+  <span class="Comment">//PResidueShell *pRShell = PResources::GetResidueShell ( res-&gt;getName ( ) ); </span>
+
+  <span class="Type">int</span> j=-<span class="Constant">1</span>;
+  <span class="Type">int</span> r;
+  <span class="Statement">while</span> ( j &lt; <span class="Constant">19</span> &amp;&amp; ( r = strncmp ( name.c_str(), SCdhdrls[++j][<span class="Constant">0</span>], <span class="Constant">3</span> ) ) != <span class="Constant">0</span> );
+  <span class="Statement">if</span> ( r != <span class="Constant">0</span> )
+  {
+    std::cout &lt;&lt; <span class="Constant">&quot;ERROR: unknown residue.&quot;</span> &lt;&lt; std::endl;
+    exit (<span class="Constant">1</span>);
+  }
+
+  <span class="Type">int</span> na = atoi ( SCdhdrls[j][<span class="Constant">1</span>] );
+
+<span class="Comment">//  std::vector&lt;std::string&gt; atms ( 2 + na );</span>
+<span class="Comment">//  atms[0] = &quot;N&quot;; atms[1] =&quot;CA&quot;;</span>
+<span class="Comment">//  for ( int k=0; k&lt;na; k++ )</span>
+<span class="Comment">//    atms[2+k] = SCdhdrls[j][3+k]; </span>
+
+  <span class="Comment">/*</span><span class="Comment">First MC atoms ... </span><span class="Comment">*/</span>
+
+<span class="Comment">//  for ( int j=0; j&lt;vResAtms.size(); ++j)</span>
+<span class="Comment">//    if ( vResAtms[j]-&gt;isOnBackbone ( ) || vResAtms[j]-&gt;getID()==PID::O )</span>
+<span class="Comment">//      atm_ids.push_back ( vResAtms[j]-&gt;getID() );</span>
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">4</span>; i++ )
+    atm_ids.push_back ( mcAtms[i] );
+
+  <span class="Comment">/*</span><span class="Comment"> then SC </span><span class="Comment">*/</span>
+<span class="Comment">//  for ( int j=0; j&lt;vResAtms.size(); ++j)</span>
+<span class="Comment">//    if ( !vResAtms[j]-&gt;isOnBackbone ( ) &amp;&amp; vResAtms[j]-&gt;getID()!=PID::O )</span>
+<span class="Comment">//      atm_ids.push_back ( vResAtms[j]-&gt;getID() );</span>
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;na; i++ )
+    atm_ids.push_back ( SCdhdrls[j][<span class="Constant">2</span>+i] );
+
+<span class="Comment">//  for ( int i=0; i&lt;atm_ids.size(); ++i )</span>
+<span class="Comment">//    std::cout &lt;&lt; atm_ids[i] &lt;&lt; std::endl;</span>
+<span class="Comment">//  exit(1);</span>
+}
+
+<span class="Comment">/*</span><span class="Comment"> To fit atoms in prvs or next residue, change:</span>
+<span class="Comment"> * 1. GetAtoms below</span>
+<span class="Comment"> * 2. The number of atoms in DoFindConf (NChiAtoms++)</span>
+<span class="Comment"> * 3. SetAtoms (finla)</span>
+<span class="Comment"> * 4. Setatoms (intermediate)</span>
+<span class="Comment"> </span><span class="Comment">*/</span>
+
+Atom_list CSideChainSampler::GetAtoms ( PResidue *res, <span class="Type">const</span> <span class="Type">bool</span> SConly )
+{
+  <span class="Comment">//const int KNMTCS_SIZE = 3;</span>
+  Atom_list atm_lst;
+  vector&lt;PAtom*&gt; vResAtms = *(res-&gt;getAtoms());
+  atm_lst.reserve ( vResAtms.size ( ) );
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;atm_ids.size(); ++j)
+    {
+      <span class="Comment">//std::cout &lt;&lt; atm_ids[j] &lt;&lt; std::endl;</span>
+      std::string id = ( atm_ids[j] != <span class="Constant">&quot;SE&quot;</span> ) ? atm_ids[j] : <span class="Constant">&quot;SD&quot;</span>; <span class="Comment">/*</span><span class="Comment">tmp fix for MSE</span><span class="Comment">*/</span>
+      PAtom* pResAtm = res-&gt;getAtom ( id );
+      Atom atm;
+      std::string el = ( atm_ids[j] != <span class="Constant">&quot;SE&quot;</span> ) ? pResAtm-&gt;getName() : <span class="Constant">&quot;Se&quot;</span>; <span class="Comment">/*</span><span class="Comment">tmp fix for MSE</span><span class="Comment">*/</span>
+      atm.set_element(el);
+      atm.set_u_iso( clipper::Util::b2u ( pResAtm-&gt;getTempFactor() ) );
+      atm.set_occupancy ( <span class="Constant">1.0</span> );
+      <span class="Type">const</span> Vector3 post = pResAtm-&gt;getPos();
+      atm.set_coord_orth(Coord_orth(post.x,post.y,post.z));
+      atm_lst.push_back ( atm );
+
+<span class="Comment">/*</span><span class="Comment"> VDB: Change to accomodate next N</span>
+<span class="Comment">      if ( j == 3 )</span>
+<span class="Comment">      {</span>
+<span class="Comment">        PResidue* resp1 = res-&gt;getChain()-&gt;getResidue ( KNMTCS_SIZE + 1);</span>
+<span class="Comment">        PAtom* pResp1Atm = resp1-&gt;getAtom ( &quot;N&quot; );</span>
+<span class="Comment">        Atom atmp1;</span>
+<span class="Comment">        atmp1.set_element(el);</span>
+<span class="Comment">        atmp1.set_u_iso( clipper::Util::b2u ( pResAtm-&gt;getTempFactor() ) );</span>
+<span class="Comment">        atmp1.set_occupancy ( 1.0 );</span>
+<span class="Comment">        const Vector3 postp1 = pResp1Atm-&gt;getPos();</span>
+<span class="Comment">        atmp1.set_coord_orth(Coord_orth(postp1.x,postp1.y,postp1.z));</span>
+<span class="Comment">        atm_lst.push_back ( atmp1 );</span>
+<span class="Comment">      }</span>
+<span class="Comment">*/</span>
+
+<span class="Comment">/*</span><span class="Comment"> VDB: Change to accomodate prvs O</span>
+<span class="Comment">      if ( j == 3 )</span>
+<span class="Comment">      {</span>
+<span class="Comment">        PResidue* resp1 = res-&gt;getChain()-&gt;getResidue ( KNMTCS_SIZE - 1);</span>
+<span class="Comment">        PAtom* pResp1Atm = resp1-&gt;getAtom ( &quot;O&quot; );</span>
+<span class="Comment">        Atom atmp1;</span>
+<span class="Comment">        el = pResAtm-&gt;getName();</span>
+<span class="Comment">        atmp1.set_element(el);</span>
+<span class="Comment">        atmp1.set_u_iso( clipper::Util::b2u ( pResp1Atm-&gt;getTempFactor() ) );</span>
+<span class="Comment">        atmp1.set_occupancy ( 1.0 );</span>
+<span class="Comment">        const Vector3 postp1 = pResp1Atm-&gt;getPos();</span>
+<span class="Comment">        atmp1.set_coord_orth(Coord_orth(postp1.x,postp1.y,postp1.z));</span>
+<span class="Comment">        atm_lst.push_back ( atmp1 );</span>
+<span class="Comment">      }</span><span class="Comment">*/</span>
+    }
+  <span class="Statement">return</span> atm_lst;
+}
+
+
+<span class="Type">void</span> CSideChainSampler::SetAtoms ( PCResidue res, <span class="Type">const</span> Atom_list&amp; atm_lst, <span class="Type">const</span> <span class="Type">char</span> altLoc, <span class="Type">const</span> <span class="Type">double</span> occupancy )
+{
+  PPCAtom pAtmTbl;
+  <span class="Type">int</span> nAtms;
+
+  <span class="Type">int</span> k = <span class="Constant">0</span>;
+        <span class="Comment">//  std::cout &lt;&lt; &quot;From SetAtoms:&quot; &lt;&lt; std::endl;</span>
+          <span class="Type">char</span> S[<span class="Constant">128</span>];
+          <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;atm_lst.size(); ++j )
+          {
+       <span class="Comment">/*</span><span class="Comment"> if ( j == 4 ) {continue;} VDB: change to get next N</span><span class="Comment">*/</span>
+            <span class="Type">double</span> q = occupancy;
+            <span class="Comment">//if ( isMC ( pAtmTbl[j] ) ) continue;</span>
+            PCAtom pAtm = <span class="Statement">new</span> CAtom ( );
+        std::cout &lt;&lt; atm_ids[k].c_str() &lt;&lt; std::endl;
+        res-&gt;InsertAtom ( pAtm, atm_ids[k].c_str() );
+
+        <span class="Type">const</span> clipper::Coord_orth atm_crds ( atm_lst[j].coord_orth ( ) );
+
+        <span class="Statement">if</span> ( isMSE &amp;&amp; atm_lst[j].element() == <span class="Constant">&quot;S&quot;</span> )
+              q *= <span class="Constant">0.4706</span>;
+
+        pAtm-&gt;SetCoordinates ( atm_crds.x(), atm_crds.y(), atm_crds.z(), q, clipper::Util::u2b ( atm_lst[j].u_iso() ) );
+            <span class="Comment">//pAtm-&gt;SetCoordinates ( 0.0, 0.0, 0.0, 1.0, 10.0 );</span>
+        <span class="Statement">if</span> ( isMSE &amp;&amp; atm_lst[j].element() == <span class="Constant">&quot;S&quot;</span> )
+              pAtm-&gt;SetElementName ( <span class="Constant">&quot;Se&quot;</span> );
+            <span class="Statement">else</span>
+          pAtm-&gt;SetElementName ( atm_lst[j].element().c_str() );
+        <span class="Comment">//std::cout &lt;&lt; atm_ids[j].c_str() &lt;&lt; endl;</span>
+        pAtm-&gt;SetAtomName ( atm_ids[k].c_str() );
+            pAtm-&gt;altLoc[<span class="Constant">0</span>] = altLoc;
+            pAtm-&gt;altLoc[<span class="Constant">1</span>] = <span class="Type">char</span>(<span class="Constant">0</span>);
+            <span class="Comment">//res-&gt;InsertAtom ( pAtm, atm_ids[j].c_str() );</span>
+            <span class="Comment">//PCMMDBFile(res-&gt;GetCoordHierarchy())-&gt;FinishStructEdit ( );</span>
+        k++;
+          }
+          res-&gt;GetAtomTable ( pAtmTbl, nAtms );
+        <span class="Comment">//  std::cout &lt;&lt; std::endl;</span>
+        <span class="Comment">//  for ( int i=0; i&lt;nAtms; i++ )</span>
+        <span class="Comment">//  {</span>
+        <span class="Comment">//    std::cout &lt;&lt; pAtmTbl[i]-&gt;GetAtomID( S) &lt;&lt; &quot; &quot; &lt;&lt; pAtmTbl[i]-&gt;serNum  &lt;&lt; std::endl;</span>
+        <span class="Comment">//  }</span>
+        <span class="Comment">//  std::cout &lt;&lt; std::endl;</span>
+          PCMMDBFile(res-&gt;GetCoordHierarchy())-&gt;FinishStructEdit ( );
+        <span class="Comment">//  WritePDB ( res-&gt;GetChain ( ), &quot;Final_.pdb&quot; );</span>
+
+        <span class="Comment">//  std::cout &lt;&lt; std::endl &lt;&lt; std::endl;</span>
+        }
+
+    <span class="Type">void</span> CSideChainSampler::SetAtoms ( PResidue *res, <span class="Type">const</span> Atom_list&amp; atm_lst, <span class="Type">const</span> <span class="Type">int</span> c_idx )
+        {
+      <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+      <span class="Comment">//if ( atm_lst.size () != atm_ids.size ( ) + 1 ) /*VDB: change to get next N*/</span>
+       <span class="Statement">if</span> ( atm_lst.size () != atm_ids.size ( ) )
+            std::cout &lt;&lt; <span class="Constant">&quot;ERROR: Atom lists differ in size!&quot;</span> &lt;&lt; std::endl;
+      PAtom *patm;
+
+      <span class="Type">int</span> k=<span class="Constant">0</span>;
+      <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;atm_lst.size (); ++i )
+      {
+        <span class="Comment">/*</span><span class="Comment">if ( i == 4 ) continue; </span><span class="Error">/</span><span class="Comment">*VDB: change to get next N or prvs O</span>
+<span class="Comment">        if ( i == 4 ) {</span>
+<span class="Comment">            PResidue* prvres = res-&gt;getChain()-&gt;getResidue ( KNMTCS_SIZE - 1 );</span>
+<span class="Comment">            patm = prvres-&gt;getAtom ( &quot;O&quot; );</span>
+<span class="Comment">            clipper::Coord_orth crd_orth = atm_lst[i].coord_orth();</span>
+<span class="Comment">            Vector3 newPos ( crd_orth.x(),crd_orth.y(), crd_orth.z() );</span>
+<span class="Comment">            patm-&gt;changePosition ( newPos );</span>
+<span class="Comment">            patm-&gt;setTempFactor ( clipper::Util::u2b ( atm_lst[i].u_iso() ) );</span>
+<span class="Comment">            patm-&gt;setOccupancy ( 1.0 );</span>
+<span class="Comment">        }</span>
+<span class="Comment">        else </span><span class="Comment">*/</span> {
+          std::string id = ( atm_ids[k] != <span class="Constant">&quot;SE&quot;</span> ) ? atm_ids[k] : <span class="Constant">&quot;SD&quot;</span>;
+          patm = res-&gt;getAtom ( id );
+          clipper::Coord_orth crd_orth = atm_lst[i].coord_orth();
+          Vector3 newPos ( crd_orth.x(),crd_orth.y(), crd_orth.z() );
+          patm-&gt;changePosition ( newPos );
+          patm-&gt;setTempFactor ( clipper::Util::u2b ( atm_lst[i].u_iso() ) );
+          patm-&gt;setOccupancy ( <span class="Constant">1.0</span> );
+          k++;
+        }
+          }
+      <span class="Type">int</span> r = rand();
+      std::ostringstream oss;
+      oss &lt;&lt; r;
+      std::ostringstream oss2;
+      oss2 &lt;&lt; c_idx;
+      PDBIO::writeToFile( res-&gt;getChain(), <span class="Constant">&quot;afterSetAtoms_&quot;</span>+oss.str()+<span class="Constant">&quot;c-idx&quot;</span>+oss2.str()+<span class="Constant">&quot;.pdb&quot;</span>);
+        }
+
+        Atom_list CSideChainSampler::GetAtoms ( PProtein *pProt, <span class="Type">const</span> <span class="Type">int</span> excl_res )
+        {
+          Atom_list atm_lst;
+          <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;pProt-&gt;size(); ++i )
+          {
+            <span class="Statement">if</span> ( i == excl_res ) <span class="Statement">continue</span>;
+            PProteinResidue *res = pProt-&gt;getResidue ( i );
+            vector&lt;PAtom*&gt; vResAtms = *(res-&gt;getAtoms());
+
+            <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;vResAtms.size(); ++j)
+            {
+              Atom atm;
+              atm.set_element(vResAtms[j]-&gt;getName());
+              atm.set_u_iso(clipper::Util::b2u ( vResAtms[j]-&gt;getTempFactor() ) );
+              atm.set_occupancy(<span class="Constant">1.0</span>);
+              <span class="Type">const</span> Vector3 post = vResAtms[j]-&gt;getPos();
+              atm.set_coord_orth(Coord_orth(post.x,post.y,post.z));
+              atm_lst.push_back ( atm );
+            }
+          }
+          <span class="Statement">return</span> atm_lst;
+        }
+
+        <span class="Comment">/*</span><span class="Comment"> Sample CB position of residue i by adjusting psi_{i-1} and phi_{i} to leave</span>
+<span class="Comment">         * the position CA_{i+1} nearly unchanged.</span>
+<span class="Comment">         * Sample psi_{i-1} and minimize phi_i.</span>
+<span class="Comment">         * This method takes 3-mers?</span>
+<span class="Comment">         </span><span class="Comment">*/</span>
+        <span class="Type">void</span> CSideChainSampler::SamplePsiPhi ( std::vector&lt;PProtein*&gt; pChnTbl, <span class="Type">const</span> <span class="Type">int</span> res_idx )
+        {
+          <span class="Type">const</span> <span class="Type">int</span> insize = pChnTbl.size();
+          <span class="Type">const</span> <span class="Type">int</span> rot_dir = <span class="Constant">1</span>;
+          Vector3 hd, tl, efftor[<span class="Constant">2</span>];
+          std::vector&lt;<span class="Type">double</span>&gt; bnd ( <span class="Constant">3</span> ), bndtl ( <span class="Constant">3</span> ), endefftor ( <span class="Constant">6</span> ), anchrs ( <span class="Constant">6</span>);
+
+          <span class="Comment">//PDBIO::writeToFile( pChnTbl.back(), &quot;before.pdb&quot; );</span>
+
+          efftor[<span class="Constant">0</span>] = pChnTbl.back()-&gt;getResidue ( <span class="Constant">2</span> )-&gt;getAtom ( PID::C_ALPHA )-&gt;getPos();
+          efftor[<span class="Constant">1</span>] = pChnTbl.back()-&gt;getResidue ( <span class="Constant">2</span> )-&gt;getAtom ( PID::C )-&gt;getPos();
+          anchrs[<span class="Constant">0</span>] = efftor[<span class="Constant">0</span>].x; anchrs[<span class="Constant">1</span>] = efftor[<span class="Constant">0</span>].y; anchrs[<span class="Constant">2</span>] = efftor[<span class="Constant">0</span>].z;
+          anchrs[<span class="Constant">3</span>] = efftor[<span class="Constant">1</span>].x; anchrs[<span class="Constant">4</span>] = efftor[<span class="Constant">1</span>].y; anchrs[<span class="Constant">5</span>] = efftor[<span class="Constant">1</span>].z;
+
+        <span class="Comment">//  for ( int i=0; i&lt;insize; ++i)</span>
+        <span class="Comment">//  {</span>
+        <span class="Comment">//    pChnTbl.push_back ( pChnTbl[i]-&gt;Clone() );</span>
+            pChnTbl.back()-&gt;RotateBackbone ( <span class="Constant">1</span> <span class="Comment">/*</span><span class="Comment">psi</span><span class="Comment">*/</span>, BondDirection(rot_dir), -<span class="Constant">10</span> );
+        <span class="Comment">//  }</span>
+
+          <span class="Comment">//PDBIO::writeToFile( pChnTbl.back(), &quot;mid.pdb&quot; );</span>
+          hd = pChnTbl.back()-&gt;getResidue ( <span class="Constant">1</span> )-&gt;getAtom ( PID::C_ALPHA )-&gt;getPos();
+          tl = pChnTbl.back()-&gt;getResidue ( <span class="Constant">1</span> )-&gt;getAtom ( PID::N )-&gt;getPos();
+          bnd[<span class="Constant">0</span>] = hd.x-tl.x; bnd[<span class="Constant">1</span>] = hd.y-tl.y; bnd[<span class="Constant">2</span>] = hd.z-tl.z;
+          bndtl[<span class="Constant">0</span>] = tl.x; bndtl[<span class="Constant">1</span>] = tl.y; bndtl[<span class="Constant">2</span>] = tl.z;
+
+          efftor[<span class="Constant">0</span>] = pChnTbl.back()-&gt;getResidue ( <span class="Constant">2</span> )-&gt;getAtom ( PID::C_ALPHA )-&gt;getPos();
+          efftor[<span class="Constant">1</span>] = pChnTbl.back()-&gt;getResidue ( <span class="Constant">2</span> )-&gt;getAtom ( PID::C )-&gt;getPos();
+          endefftor[<span class="Constant">0</span>] = efftor[<span class="Constant">0</span>].x; endefftor[<span class="Constant">1</span>] = efftor[<span class="Constant">0</span>].y; endefftor[<span class="Constant">2</span>] = efftor[<span class="Constant">0</span>].z;
+          endefftor[<span class="Constant">3</span>] = efftor[<span class="Constant">1</span>].x; endefftor[<span class="Constant">4</span>] = efftor[<span class="Constant">1</span>].y; endefftor[<span class="Constant">5</span>] = efftor[<span class="Constant">1</span>].z;
+
+          std::cout &lt;&lt; CalcMinimizingAngle ( bnd, bndtl, endefftor, anchrs ) * <span class="Constant">180.</span>/<span class="Constant">M_PI</span> &lt;&lt; <span class="Constant">&quot;</span><span class="Special">\n</span><span class="Constant">&quot;</span>;
+
+          pChnTbl.back()-&gt;RotateBackbone ( <span class="Constant">2</span> <span class="Comment">/*</span><span class="Comment">psi</span><span class="Comment">*/</span>, BondDirection(rot_dir),
+           -CalcMinimizingAngle ( bnd, bndtl, endefftor, anchrs ) * <span class="Constant">180.</span>/<span class="Constant">M_PI</span>);
+
+          <span class="Comment">//PDBIO::writeToFile( pChnTbl.back(), &quot;after.pdb&quot; );</span>
+          <span class="Comment">/*</span><span class="Comment"> Rotate phi angle to match anchor positions.</span><span class="Comment">*/</span>
+        }
+
+        <span class="Type">bool</span> CSideChainSampler::BondAngle ( PProteinResidue* pPres, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+        {
+          <span class="Comment">/*</span><span class="Comment">Change bondangles simultaneouly for 2 dofs </span><span class="Comment">*/</span>
+          PAtom *patm1, *patm2, *patm3;
+          Vector3 bnd1, bnd2, axis;
+          <span class="Comment">//const float dAngle = 10.;</span>
+          <span class="Type">const</span> <span class="Type">float</span> dAngle = <span class="Constant">7.5</span>;
+
+          patm1 = pPres-&gt;getAtom ( PID::C_ALPHA );
+          patm2 = pPres-&gt;getAtom ( PID::C_BETA );
+          patm3 = pPres-&gt;getAtom ( <span class="Constant">&quot;CG&quot;</span> );
+
+          bnd1 = patm2-&gt;getPos ( ) - patm1-&gt;getPos ( );
+          bnd2 = patm3-&gt;getPos ( ) - patm2-&gt;getPos ( );
+          PBond *pBond = pPres-&gt;getBond ( PID::C_ALPHA, PID::C_BETA );
+
+          axis  = cross ( bnd1, bnd2 );
+
+          MyRotater rinit1 (patm2-&gt;getPos(), axis, -dAngle );
+          pBond-&gt;traverseAtoms(forward, &amp;rinit1, pPres-&gt;getChain());
+          Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+
+          pBond-&gt;traverseAtoms(forward, &amp;rinit1, pPres-&gt;getChain());
+          Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+
+          MyRotater rinit2 (patm2-&gt;getPos(), axis, <span class="Constant">4</span>*dAngle );
+          pBond-&gt;traverseAtoms(forward, &amp;rinit2, pPres-&gt;getChain());
+          Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+
+          pBond-&gt;traverseAtoms(forward, &amp;rinit1, pPres-&gt;getChain());
+          Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+
+          pBond-&gt;traverseAtoms(forward, &amp;rinit1, pPres-&gt;getChain());
+          <span class="Statement">return</span> <span class="Constant">true</span>;
+        }
+
+<span class="Type">void</span> CSideChainSampler::GenTrialPositions( PProteinResidue* pPres, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+{
+    <span class="Statement">if</span>((pPres-&gt;getName()==PID::ALA)||(pPres-&gt;getName()==PID::GLY) )
+    {
+        Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+        <span class="Statement">return</span>;
+    }
+
+    vector&lt;vector&lt;Real&gt; &gt; rotamerAngles = PResources::GetRotamer(pPres-&gt;getName());
+    <span class="Comment">//std::cout &lt;&lt; &quot;NRotamers: &quot; &lt;&lt;  rotamerAngles.size() &lt;&lt; std::endl;</span>
+    <span class="Type">const</span> Real Tf = pPres-&gt;getAtom ( PID::C_ALPHA )-&gt;getTempFactor();
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;rotamerAngles.size(); ++j )
+    {
+        vector&lt;vector&lt;Real&gt; &gt; rotamerNeighborhood;
+        <span class="Statement">if</span> ( pPres-&gt;getName()==PID::PRO )
+            rotamerNeighborhood.push_back ( rotamerAngles[j] );
+        <span class="Statement">else</span>
+            SampleRotamerNeighborhood ( pPres, rotamerAngles[j], rotamerNeighborhood );
+
+        <span class="Statement">for</span> ( <span class="Type">int</span> k=<span class="Constant">0</span>; k&lt;rotamerNeighborhood.size(); ++k )
+        {
+            <span class="Comment">//if ( pPres-&gt;getName()!=PID::PRO )</span>
+            <span class="Comment">//for ( int ll=0; ll&lt;rotamerNeighborhood[k].size(); ++ll)</span>
+            <span class="Comment">//    std::cout &lt;&lt; rotamerNeighborhood[k][ll] &lt;&lt; std::endl;</span>
+            RotamerApply ( pPres, rotamerNeighborhood[k]);
+            <span class="Statement">for</span> ( <span class="Type">int</span> l=<span class="Constant">0</span>; l&lt;<span class="Constant">1</span>; l++ )
+            {
+                SetTFactor ( pPres, Tf+<span class="Constant">0.2</span>*l*Tf );
+                Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+                <span class="Statement">if</span> ( isRing ( pPres ) )
+                    BondAngle ( pPres, Atm_lst );
+            }
+        }
+<span class="Comment">//    std::ostringstream oss;</span>
+<span class="Comment">//    oss &lt;&lt; j;</span>
+<span class="Comment">//    PDBIO::writeToFile( pPres-&gt;getChain ( ), &quot;rot_&quot;+oss.str()+&quot;.pdb&quot; );</span>
+    }
+}
+
+        <span class="Type">void</span> CSideChainSampler::GenTrialPositions_AtChi( PProteinResidue* pPres, <span class="Type">const</span> <span class="Type">int</span> chi_idx, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+        {
+      <span class="Statement">if</span>((pPres-&gt;getName()==PID::ALA)||(pPres-&gt;getName()==PID::GLY) || chi_idx == <span class="Constant">0</span> )
+          {
+            Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+            <span class="Statement">return</span>;
+          }
+
+      std::cout &lt;&lt; <span class="Constant">&quot;gSAMPLE_SIZE: &quot;</span> &lt;&lt; gSAMPLE_SIZE &lt;&lt; std::endl;
+<span class="Comment">/*</span>
+<span class="Comment">          const double delta = 2.5;</span>
+<span class="Comment">          const int SAMPLE_SIZE = 21;</span>
+<span class="Comment">          Real rotamer_delta[SAMPLE_SIZE];</span>
+<span class="Comment">          </span>
+<span class="Comment">          for ( int i=-10; i&lt;11; i++ )</span>
+<span class="Comment">            rotamer_delta[i+10] = i*delta;</span>
+
+<span class="Comment">      const double delta = 4.5;</span>
+<span class="Comment">      const int SAMPLE_SIZE = 7;</span>
+<span class="Comment">          Real rotamer_delta[SAMPLE_SIZE];</span>
+<span class="Comment">          </span>
+<span class="Comment">      for ( int i=-3; i&lt;4; i++ )</span>
+<span class="Comment">        rotamer_delta[i+1] = i*delta;</span>
+<span class="Comment">*/</span>
+      <span class="Type">const</span> <span class="Type">int</span> SAMPLE_SIZE = gSAMPLE_SIZE;
+      <span class="Type">int</span> bnd = (<span class="Type">int</span>)gSAMPLE_SIZE/<span class="Constant">2</span>;
+      <span class="Type">const</span> <span class="Type">double</span> delta = (<span class="Type">double</span>)<span class="Constant">25</span>/(<span class="Type">double</span>)(bnd);
+      Real rotamer_delta[SAMPLE_SIZE];
+
+      <span class="Statement">for</span> ( <span class="Type">int</span> i=-bnd; i&lt;bnd+<span class="Constant">1</span>; i++ )
+        rotamer_delta[i+bnd] = i*delta;
+
+      std::cout &lt;&lt; <span class="Constant">&quot;SAMPLE_SIZE: &quot;</span> &lt;&lt; SAMPLE_SIZE &lt;&lt; <span class="Constant">&quot; bnd: &quot;</span> &lt;&lt; bnd &lt;&lt; <span class="Constant">&quot; delta: &quot;</span> &lt;&lt; delta &lt;&lt; std::endl;
+
+          vector&lt;vector&lt;Real&gt; &gt; rotamerAngles = PResources::GetRotamer(pPres-&gt;getName());
+          std::vector&lt;<span class="Type">int</span>&gt; angles_added;
+
+          <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;rotamerAngles.size(); ++j )
+          {
+            <span class="Statement">if</span> ( chi_idx &gt; <span class="Constant">1</span> &amp;&amp; mCSolver.RSLN &gt; <span class="Constant">1.1</span> &amp;&amp; pPres-&gt;getName()!=PID::TRP )
+            {
+              Real Chi_last = pPres-&gt;GetChi ( chi_idx-<span class="Constant">1</span> );
+              Chi_last -= rint ( Chi_last * <span class="Constant">0.0027777778</span> ) * <span class="Constant">360</span>;
+              Real dchi = Chi_last-rotamerAngles[j][chi_idx-<span class="Constant">2</span>];
+              std::cout &lt;&lt; <span class="Constant">&quot;last chi: &quot;</span> &lt;&lt; Chi_last &lt;&lt; <span class="Constant">&quot; rotamer angle: &quot;</span> &lt;&lt; rotamerAngles[j][chi_idx-<span class="Constant">2</span>];
+              <span class="Statement">if</span> ( dchi &gt; <span class="Constant">180</span> ) dchi -= <span class="Constant">360</span>;
+              <span class="Statement">if</span> ( dchi &lt;= -<span class="Constant">180</span> ) dchi += <span class="Constant">360</span>;
+              std::cout &lt;&lt; <span class="Constant">&quot; distance: &quot;</span> &lt;&lt; dchi &lt;&lt; std::endl;
+          <span class="Statement">if</span> ( std::abs (dchi) &gt; (bnd + <span class="Constant">.5</span>)*delta ) <span class="Statement">continue</span>;
+              std::cout &lt;&lt; <span class="Constant">&quot;Rotamer angle corresponding to current configuration: &quot;</span> &lt;&lt; rotamerAngles[j][chi_idx-<span class="Constant">2</span>] &lt;&lt; std::endl;
+              std::cout &lt;&lt; <span class="Constant">&quot;Setting next angle to : &quot;</span> &lt;&lt; rotamerAngles[j][chi_idx-<span class="Constant">1</span>] &lt;&lt; std::endl;
+            }
+
+            <span class="Statement">if</span> ( std::find ( angles_added.begin(), angles_added.end(), (<span class="Type">int</span>)(rotamerAngles[j][chi_idx-<span class="Constant">1</span>]) ) != angles_added.end ( ) ) <span class="Statement">continue</span>;
+
+            angles_added.push_back ( rotamerAngles[j][chi_idx-<span class="Constant">1</span>] );
+            std::ostringstream ossj;
+            ossj &lt;&lt; j+rand();
+            <span class="Type">const</span> Real Tf = pPres-&gt;getAtom ( PID::C_ALPHA )-&gt;getTempFactor();
+            <span class="Statement">for</span> ( <span class="Type">int</span> k=<span class="Constant">0</span>; k&lt;SAMPLE_SIZE; k++ )
+            {
+              SetChi ( pPres, chi_idx, rotamer_delta[k]+rotamerAngles[j][chi_idx-<span class="Constant">1</span>]);
+              <span class="Statement">for</span> ( <span class="Type">int</span> l=<span class="Constant">0</span>; l&lt;<span class="Constant">1</span>; l++ )
+              {
+            SetTFactor ( pPres, Tf+<span class="Constant">0.2</span>*l*Tf, chi_idx );
+
+            Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+            <span class="Statement">if</span> ( isMSE &amp;&amp; chi_idx &gt;= <span class="Constant">2</span> )
+            {
+              Atm_lst.push_back ( Atm_lst.back() );
+              Atm_lst.back()[<span class="Constant">10</span>].set_element ( <span class="Constant">&quot;S&quot;</span> );
+            }
+            <span class="Statement">if</span> ( isRing ( pPres ) &amp;&amp; chi_idx == <span class="Constant">1</span> )
+              BondAngle ( pPres, Atm_lst );
+              }
+
+<span class="Comment">//          if ( chi_idx == 1 )</span>
+<span class="Comment">//          {</span>
+<span class="Comment">//            std::ostringstream ossk;</span>
+<span class="Comment">//            ossk &lt;&lt; k;</span>
+<span class="Comment">//            PDBIO::writeToFile( pPres-&gt;getChain ( ), &quot;rot_&quot;+ossj.str()+&quot;_&quot;+ossk.str()+&quot;.pdb&quot; );</span>
+<span class="Comment">//          }</span>
+            }
+          }
+        }
+
+        <span class="Type">bool</span> CSideChainSampler::Calc_GradientMove ( PResidue *res, std::vector&lt;clipper::ftype&gt;&amp; grad, <span class="Type">const</span> <span class="Type">double</span> occ )
+        {
+          <span class="Comment">/*</span><span class="Comment">Packae up atoms </span><span class="Comment">*/</span>
+          Atom_list atm_lst;
+      PAtom* resAtm = ( res-&gt;getAtom(PID::C_BETA) );
+
+          Atom atm;
+          atm.set_element(resAtm-&gt;getName());
+          atm.set_u_iso( clipper::Util::b2u ( resAtm-&gt;getTempFactor() ) );
+          atm.set_occupancy ( <span class="Constant">1.0</span> );
+          <span class="Type">const</span> Vector3 post = resAtm-&gt;getPos();
+          atm.set_coord_orth(Coord_orth(post.x,post.y,post.z));
+          atm_lst.push_back ( atm );
+
+          std::cout &lt;&lt; atm.element ( ) &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; atm.coord_orth().format() &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; atm.u_iso() &lt;&lt; <span class="Constant">&quot; &quot;</span> &lt;&lt; atm.occupancy() &lt;&lt; std::endl;
+
+          mCSolver.CalcAtomGradient ( atm_lst, grad, occ );
+
+          <span class="Type">double</span> norm =<span class="Constant">0.0</span>;
+          <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;grad.size(); ++i )
+            norm += (grad[i]*grad[i]);
+          norm = sqrt(norm);
+          <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;grad.size(); ++i )
+            grad[i] /= norm;
+
+          <span class="Statement">return</span> <span class="Constant">true</span>;
+        }
+
+        <span class="Type">float</span> CSideChainSampler::Calc_CC ( PResidue *res )
+        {
+          <span class="Comment">/*</span><span class="Comment">Package up atoms </span><span class="Comment">*/</span>
+          Atom_list atm_lst;
+
+     <span class="Comment">// PAtom* resAtm = res-&gt;getName()==PID::GLY ? ( res-&gt;getAtom(PID::O) ) : ( res-&gt;getAtom(PID::C_BETA) );</span>
+
+      PAtom* resAtm = res-&gt;getAtom(PID::O);
+
+          Atom atm;
+          atm.set_element(resAtm-&gt;getName());
+          atm.set_u_iso( clipper::Util::b2u ( resAtm-&gt;getTempFactor() ) );
+          atm.set_occupancy ( <span class="Constant">1.0</span> );
+          <span class="Type">const</span> Vector3 post = resAtm-&gt;getPos();
+          atm.set_coord_orth(Coord_orth(post.x,post.y,post.z));
+          atm_lst.push_back ( atm );
+
+          <span class="Comment">//std::cout &lt;&lt; atm.element ( ) &lt;&lt; &quot; &quot; &lt;&lt; atm.coord_orth().format() &lt;&lt; &quot; &quot; &lt;&lt; atm.u_iso() &lt;&lt; &quot; &quot; &lt;&lt; atm.occupancy() &lt;&lt; std::endl;</span>
+
+          <span class="Statement">return</span>  mCSolver.CalcCC ( atm_lst );
+        }
+
+<span class="Type">bool</span> CSideChainSampler::SampleCB_MC ( PProteinResidue* pPres, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+{
+   <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+   std::vector&lt;std::pair&lt;Real, std::pair&lt; Vector3, <span class="Type">bool</span> &gt; &gt; &gt; mvDirs;
+
+  <span class="Statement">for</span> ( <span class="Type">float</span> ampl = <span class="Constant">0.10</span>; ampl &lt; <span class="Constant">0.31</span>; ampl += <span class="Constant">0.10</span> )
+  {
+    MC_AMPL = ampl;
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">0</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">0</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">1</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">1</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">2</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">2</span>) ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( EVectorSum[<span class="Constant">0</span>], EVectorSum[<span class="Constant">1</span>], EVectorSum[<span class="Constant">2</span>] ), <span class="Constant">false</span> ) ) );
+    mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( EVectorSum[<span class="Constant">0</span>], EVectorSum[<span class="Constant">1</span>], EVectorSum[<span class="Constant">2</span>] ), <span class="Constant">false</span> ) ) );
+  }
+
+  PProtein *pChn = pPres-&gt;getProtein()-&gt;Clone();
+  <span class="Comment">/*</span><span class="Comment">Check for leak</span><span class="Comment">*/</span>
+
+  <span class="Type">const</span> <span class="Type">bool</span> isGLY = pPres-&gt;getName()==PID::GLY;
+
+  <span class="Type">const</span> string atomid = ( isGLY ) ? PID::O : PID::C_BETA;
+<span class="Comment">/*</span>
+<span class="Comment">  for ( int j=0; j&lt;mvDirs.size(); ++j )</span>
+<span class="Comment">  {</span>
+<span class="Comment">    IKSolutions myIKSolns;</span>
+<span class="Comment">    PProtein *pChnCln = pChn-&gt;Clone ( );</span>
+<span class="Comment">    //std::cout &lt;&lt; &quot;Getting to &quot; &lt;&lt; mvDirs[j].second &lt;&lt; &quot;\n&quot;;</span>
+<span class="Comment">    std::ostringstream oss;</span>
+<span class="Comment">    oss &lt;&lt; j;</span>
+<span class="Comment">    //PDBIO::writeToFile ( pChnCln, &quot;before_&quot;+oss.str()+&quot;.pdb&quot; );</span>
+<span class="Comment">    myIKSolns = MoveAtom ( pChnCln, pChnCln-&gt;getResidue( KNMTCS_SIZE )-&gt;getAtom ( atomid ) , mvDirs[j].second.first );</span>
+<span class="Comment">    if ( mvDirs[j].second.second )</span>
+<span class="Comment">      FlipPeptide ( pChnCln );</span>
+<span class="Comment">    mvDirs[j].first = Calc_CC ( pChnCln-&gt;getResidue( KNMTCS_SIZE ) );</span>
+<span class="Comment">    PDBIO::writeToFile ( pChnCln, &quot;after_&quot;+oss.str()+&quot;.pdb&quot; );</span>
+<span class="Comment">    pChnCln-&gt;Obliterate();</span>
+<span class="Comment">  }</span>
+
+<span class="Comment">  std::stable_sort( mvDirs.begin(), mvDirs.end(), ComparePair1stDsc&lt;float,std::pair&lt;Vector3,bool &gt; &gt;() );</span>
+<span class="Comment">*/</span>
+<span class="Comment">//  std::cout &lt;&lt; &quot;CC = &quot; &lt;&lt; std::endl;</span>
+<span class="Comment">//  for ( int j=0; j&lt;mvDirs.size(); ++j )</span>
+<span class="Comment">//    std::cout &lt;&lt; mvDirs[j].second &lt;&lt; &quot; &quot; &lt;&lt; mvDirs[j].first &lt;&lt; std::endl;</span>
+
+  <span class="Comment">//std::cout &lt;&lt; Calc_CC ( pPres ) &lt;&lt; std::endl;</span>
+  <span class="Comment">//const int nbb = isGLY ? mvDirs.size() : 4;</span>
+
+  <span class="Type">const</span> <span class="Type">int</span> nbb = mvDirs.size();
+  <span class="Type">const</span> <span class="Type">int</span> nflips = <span class="Constant">4</span>;
+  <span class="Type">int</span> k = <span class="Constant">0</span>;
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> j=-<span class="Constant">1</span>; j&lt;nbb; ++j)
+  {
+      PProtein *pChnCln = pChn-&gt;Clone ( );
+
+      <span class="Statement">if</span> ( j &gt;= <span class="Constant">0</span> )
+         IKSolutions myIKSolns = MoveAtom ( pChnCln, pChnCln-&gt;getResidue( KNMTCS_SIZE )-&gt;getAtom ( atomid ) , mvDirs[j].second.first );
+
+      std::ostringstream oss;
+      oss &lt;&lt; k;
+      k++;
+      PDBIO::writeToFile ( pChnCln, <span class="Constant">&quot;after_&quot;</span>+oss.str()+<span class="Constant">&quot;.pdb&quot;</span> );
+
+      GenTrialPositions( pChnCln-&gt;getResidue( KNMTCS_SIZE ), Atm_lst );
+
+      <span class="Statement">if</span> ( flip_peptide )
+          <span class="Statement">for</span> ( <span class="Type">int</span> l=<span class="Constant">0</span>; l&lt;nflips; ++l )
+          {
+              PProtein *pChnFlipCln = pChnCln-&gt;Clone ( );
+              <span class="Statement">if</span> ( l == <span class="Constant">0</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD0, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">1</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD1, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">2</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD2, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">3</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD3, <span class="Constant">3</span> );
+
+              PProtein *pChnSmall = <span class="Statement">new</span> PProtein ( pChnFlipCln, KNMTCS_SIZE,  KNMTCS_SIZE );
+
+              PDBIO::writeMainchainToFile ( pChnSmall, <span class="Constant">&quot;.t.pdb&quot;</span> );
+              pChnFlipCln-&gt;Obliterate();
+              pChnFlipCln = PDBIO::readFromFile( <span class="Constant">&quot;.t.pdb&quot;</span> );
+              PDBIO::writeToFile ( pChnFlipCln, <span class="Constant">&quot;.tsc.pdb&quot;</span> );
+
+              Vector3 hd, tl, efftor;
+              std::vector&lt;<span class="Type">double</span>&gt; bnd ( <span class="Constant">3</span> ), bndtl ( <span class="Constant">3</span> ), endefftor ( <span class="Constant">3</span> ), anchrs ( <span class="Constant">3</span> );
+
+              hd = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::C )-&gt;getPos();
+              tl = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::C_ALPHA )-&gt;getPos();
+              bnd[<span class="Constant">0</span>] = hd.x-tl.x; bnd[<span class="Constant">1</span>] = hd.y-tl.y; bnd[<span class="Constant">2</span>] = hd.z-tl.z;
+              bndtl[<span class="Constant">0</span>] = tl.x; bndtl[<span class="Constant">1</span>] = tl.y; bndtl[<span class="Constant">2</span>] = tl.z;
+
+              efftor = pChnCln-&gt;getResidue ( KNMTCS_SIZE )-&gt;getAtom ( PID::N )-&gt;getPos();
+              anchrs[<span class="Constant">0</span>] = efftor.x; anchrs[<span class="Constant">1</span>] = efftor.y; anchrs[<span class="Constant">2</span>] = efftor.z;
+
+              efftor = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::N )-&gt;getPos();
+              endefftor[<span class="Constant">0</span>] = efftor.x; endefftor[<span class="Constant">1</span>] = efftor.y; endefftor[<span class="Constant">2</span>] = efftor.z;
+
+              <span class="Type">const</span> Real dAngle = CalcMinimizingAngle ( bnd, bndtl, endefftor, anchrs ) * <span class="Constant">180.</span>/<span class="Constant">M_PI</span>;
+              pChnFlipCln-&gt;RotateBackbone ( <span class="Constant">1</span> <span class="Comment">/*</span><span class="Comment">psi</span><span class="Comment">*/</span>, BondDirection(<span class="Constant">0</span>), dAngle );
+              std::cout &lt;&lt; dAngle &lt;&lt; <span class="Constant">&quot;</span><span class="Special">\n</span><span class="Constant">&quot;</span>;
+
+              std::ostringstream oss;
+              oss &lt;&lt; k;
+              k++;
+              PDBIO::writeToFile ( pChnFlipCln, <span class="Constant">&quot;afterFlip_&quot;</span>+oss.str()+<span class="Constant">&quot;.pdb&quot;</span> );
+
+              GenTrialPositions( pChnFlipCln-&gt;getResidue( <span class="Constant">0</span> ), Atm_lst );
+
+              pChnFlipCln-&gt;Obliterate(); <span class="Comment">/*</span><span class="Comment">deallocates pChnSmall too </span><span class="Comment">*/</span>
+          }
+      pChnCln-&gt;Obliterate();
+  }
+
+  pChn-&gt;Obliterate();
+  std::cout &lt;&lt; <span class="Constant">&quot;SampleCB_MC: Conformers to estimate: &quot;</span> &lt;&lt; Atm_lst.size() &lt;&lt; std::endl;
+  <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+<span class="Type">bool</span> CSideChainSampler::Sample_OnMC ( PProteinResidue* pPres, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; oc,  std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+{
+  <span class="Comment">/*</span><span class="Comment"> 1. Extract coords from Atm_lst</span>
+<span class="Comment">   * 2. Sample new chi</span>
+<span class="Comment">   </span><span class="Comment">*/</span>
+  <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+  std::vector&lt;clipper::Atom_list&gt; atm_lst_;
+
+  PProtein *pChn = pPres-&gt;getProtein()-&gt;Clone();
+  <span class="Comment">//PProtein *pChn = pPres-&gt;getProtein();</span>
+  <span class="Comment">//PProtein *pChn = (new PProtein ( pPres-&gt;getProtein(), resnum - KNMTCS_SIZE, resnum + KNMTCS_SIZE ) );</span>
+
+  <span class="Type">double</span> occ_thrshld = <span class="Constant">0.09</span>;
+  <span class="Statement">if</span> ( find_if (oc.begin(), oc.end(),bind2nd(greater&lt;<span class="Type">double</span>&gt;(),occ_thrshld) ) == oc.end() )
+  {
+    std::cout &lt;&lt; <span class="Constant">&quot;WARNING: minimum occupancy not found.&quot;</span> &lt;&lt; std::endl;
+    occ_thrshld = <span class="Constant">0.0</span>;
+  }
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;oc.size(); ++j )
+    <span class="Statement">if</span> ( oc[j] &gt; occ_thrshld )
+      atm_lst_.push_back ( Atm_lst[j] );
+
+  Atm_lst.clear();
+
+<span class="Comment">//  std::cout &lt;&lt; &quot;atm_lst_[0]: &quot; &lt;&lt; atm_lst_[0].size() &lt;&lt; std::endl;</span>
+<span class="Comment">//  std::cout &lt;&lt; &quot;atm_ids: &quot; &lt;&lt; atm_ids.size() &lt;&lt; std::endl;</span>
+
+  <span class="Comment">/*</span><span class="Comment"> Output below looks funky if MC atoms came from flipped peptide.</span>
+<span class="Comment">   *Shouldn't matter as long as 'N' of next atom is not part of fit</span>
+<span class="Comment">   </span><span class="Comment">*/</span>
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;atm_lst_.size(); ++j )
+  {
+    SetAtoms ( pChn-&gt;getResidue( KNMTCS_SIZE ), atm_lst_[j] );
+    GenTrialPositions( pChn-&gt;getResidue( KNMTCS_SIZE ), Atm_lst );
+    std::ostringstream oss;
+    oss &lt;&lt; j;
+    PDBIO::writeToFile ( pChn, <span class="Constant">&quot;after_sampled&quot;</span>+oss.str()+<span class="Constant">&quot;.pdb&quot;</span> );
+  }
+
+  pChn-&gt;Obliterate();
+  <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+<span class="Type">bool</span> CSideChainSampler::Sample_NextChi ( PProteinResidue* pPres, <span class="Type">const</span> <span class="Type">int</span> next_chi_idx, <span class="Type">const</span> std::vector&lt;<span class="Type">double</span>&gt;&amp; oc,  std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+        {
+          <span class="Comment">/*</span><span class="Comment"> 1. Extract coords from Atm_lst</span>
+<span class="Comment">           * 2. Sample new chi</span>
+<span class="Comment">           </span><span class="Comment">*/</span>
+          <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+          std::vector&lt;clipper::Atom_list&gt; atm_lst_;
+
+          PProtein *pChn = pPres-&gt;getProtein()-&gt;Clone();
+
+      <span class="Type">double</span> occ_thrshld = <span class="Constant">0.0</span>;
+          <span class="Statement">if</span> ( find_if (oc.begin(), oc.end(),bind2nd(greater&lt;<span class="Type">double</span>&gt;(),occ_thrshld) ) == oc.end() )
+          {
+            std::cout &lt;&lt; <span class="Constant">&quot;WARNING: minimum occupancy not found.&quot;</span> &lt;&lt; std::endl;
+            occ_thrshld = <span class="Constant">0.0</span>;
+          }
+
+          <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;oc.size(); ++j )
+            <span class="Statement">if</span> ( oc[j] &gt; occ_thrshld )
+              atm_lst_.push_back ( Atm_lst[j] );
+
+          Atm_lst.clear();
+
+        <span class="Comment">//  std::cout &lt;&lt; &quot;atm_lst_[0]: &quot; &lt;&lt; atm_lst_[0].size() &lt;&lt; std::endl;</span>
+        <span class="Comment">//  std::cout &lt;&lt; &quot;atm_ids: &quot; &lt;&lt; atm_ids.size() &lt;&lt; std::endl;</span>
+
+          <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;atm_lst_.size(); ++j )
+          {
+        SetAtoms ( pChn-&gt;getResidue( KNMTCS_SIZE ), atm_lst_[j], next_chi_idx );
+            GenTrialPositions_AtChi( pChn-&gt;getResidue( KNMTCS_SIZE ), next_chi_idx, Atm_lst );
+          }
+
+          pChn-&gt;Obliterate();
+      <span class="Statement">return</span> <span class="Constant">true</span>;
+        }
+
+<span class="Type">bool</span> CSideChainSampler::SampleCB_MC_AtChi ( PProteinResidue* pPres, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+{
+    <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+
+    std::vector&lt;std::pair&lt;Real, std::pair&lt; Vector3, <span class="Type">bool</span> &gt; &gt; &gt; mvDirs;
+
+    <span class="Statement">for</span> ( <span class="Type">float</span> ampl = <span class="Constant">0.10</span>; ampl &lt; <span class="Constant">0.31</span>; ampl += <span class="Constant">0.1</span> )
+    {
+      MC_AMPL = ampl;
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">0</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">0</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">0</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">1</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">1</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">1</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">2</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( Ueigen (<span class="Constant">0</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">1</span>,<span class="Constant">2</span>), Ueigen (<span class="Constant">2</span>,<span class="Constant">2</span>) ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( MC_AMPL+MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( EVectorSum[<span class="Constant">0</span>], EVectorSum[<span class="Constant">1</span>], EVectorSum[<span class="Constant">2</span>] ), <span class="Constant">false</span> ) ) );
+      mvDirs.push_back ( std::make_pair ( <span class="Constant">0.0</span>, std::make_pair ( ( -MC_AMPL-MC_SIG*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>) )*Vector3 ( EVectorSum[<span class="Constant">0</span>], EVectorSum[<span class="Constant">1</span>], EVectorSum[<span class="Constant">2</span>] ), <span class="Constant">false</span> ) ) );
+    }
+
+    PProtein *pChn = pPres-&gt;getProtein()-&gt;Clone();
+    <span class="Comment">/*</span><span class="Comment">Check for leak</span><span class="Comment">*/</span>
+
+    <span class="Comment">// for ( int j=0; j&lt;mvDirs.size(); ++j )</span>
+    <span class="Comment">//   std::cout &lt;&lt; mvDirs[j].second &lt;&lt; std::endl;</span>
+
+<span class="Comment">//    unsigned chiMax = PResources::numChiIndices(pChn-&gt;getResidue( KNMTCS_SIZE )-&gt;getName());</span>
+    <span class="Type">int</span> chi_idx = <span class="Constant">1</span>;
+
+    <span class="Type">const</span> <span class="Type">int</span> nbb = mvDirs.size();
+    <span class="Comment">//const int nbb = 1;</span>
+    <span class="Type">const</span> <span class="Type">int</span> nflips = <span class="Constant">4</span>;
+    <span class="Type">int</span> k = <span class="Constant">0</span>;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=-<span class="Constant">1</span>; j&lt;nbb; ++j)
+    {
+      PProtein *pChnCln = pChn-&gt;Clone ( );
+
+      <span class="Statement">if</span> ( j&gt;= <span class="Constant">0</span> )
+        IKSolutions myIKSolns = MoveAtom ( pChnCln, pChnCln-&gt;getResidue( KNMTCS_SIZE )-&gt;getAtom ( PID::C_BETA ) , mvDirs[j].second.first );
+
+      std::ostringstream oss;
+      oss &lt;&lt; k;
+      k++;
+      PDBIO::writeToFile ( pChnCln, <span class="Constant">&quot;after_&quot;</span>+oss.str()+<span class="Constant">&quot;.pdb&quot;</span> );
+
+      GenTrialPositions_AtChi( pChnCln-&gt;getResidue( KNMTCS_SIZE ), chi_idx, Atm_lst );
+
+      <span class="Statement">if</span> ( flip_peptide &amp;&amp; ( j == -<span class="Constant">1</span> || j == <span class="Constant">6</span> || j == <span class="Constant">7</span> ) )
+          <span class="Statement">for</span> ( <span class="Type">int</span> l=<span class="Constant">0</span>; l&lt;nflips; ++l )
+          {
+              PProtein *pChnFlipCln = pChnCln-&gt;Clone ( );
+              <span class="Statement">if</span> ( l == <span class="Constant">0</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD0, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">1</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD1, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">2</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD2, <span class="Constant">3</span> );
+              <span class="Statement">else</span> <span class="Statement">if</span> ( l == <span class="Constant">3</span> )
+                  FlipTransformPeptide ( pChnFlipCln, FD3, <span class="Constant">3</span> );
+
+              PProtein *pChnSmall = <span class="Statement">new</span> PProtein ( pChnFlipCln, KNMTCS_SIZE,  KNMTCS_SIZE );
+
+              PDBIO::writeMainchainToFile ( pChnSmall, <span class="Constant">&quot;.t.pdb&quot;</span> );
+              pChnFlipCln-&gt;Obliterate();
+              pChnFlipCln = PDBIO::readFromFile( <span class="Constant">&quot;.t.pdb&quot;</span> );
+              PDBIO::writeToFile ( pChnFlipCln, <span class="Constant">&quot;.tsc.pdb&quot;</span> );
+
+              Vector3 hd, tl, efftor;
+              std::vector&lt;<span class="Type">double</span>&gt; bnd ( <span class="Constant">3</span> ), bndtl ( <span class="Constant">3</span> ), endefftor ( <span class="Constant">3</span> ), anchrs ( <span class="Constant">3</span> );
+
+              hd = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::C )-&gt;getPos();
+              tl = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::C_ALPHA )-&gt;getPos();
+              bnd[<span class="Constant">0</span>] = hd.x-tl.x; bnd[<span class="Constant">1</span>] = hd.y-tl.y; bnd[<span class="Constant">2</span>] = hd.z-tl.z;
+              bndtl[<span class="Constant">0</span>] = tl.x; bndtl[<span class="Constant">1</span>] = tl.y; bndtl[<span class="Constant">2</span>] = tl.z;
+
+              efftor = pChnCln-&gt;getResidue ( KNMTCS_SIZE )-&gt;getAtom ( PID::N )-&gt;getPos();
+              anchrs[<span class="Constant">0</span>] = efftor.x; anchrs[<span class="Constant">1</span>] = efftor.y; anchrs[<span class="Constant">2</span>] = efftor.z;
+
+              efftor = pChnFlipCln-&gt;getResidue ( <span class="Constant">0</span> )-&gt;getAtom ( PID::N )-&gt;getPos();
+              endefftor[<span class="Constant">0</span>] = efftor.x; endefftor[<span class="Constant">1</span>] = efftor.y; endefftor[<span class="Constant">2</span>] = efftor.z;
+
+              <span class="Type">const</span> Real dAngle = CalcMinimizingAngle ( bnd, bndtl, endefftor, anchrs ) * <span class="Constant">180.</span>/<span class="Constant">M_PI</span>;
+              pChnFlipCln-&gt;RotateBackbone ( <span class="Constant">1</span> <span class="Comment">/*</span><span class="Comment">psi</span><span class="Comment">*/</span>, BondDirection(<span class="Constant">0</span>), dAngle );
+              std::cout &lt;&lt; dAngle &lt;&lt; <span class="Constant">&quot;</span><span class="Special">\n</span><span class="Constant">&quot;</span>;
+
+              std::ostringstream oss;
+              oss &lt;&lt; k;
+              k++;
+              PDBIO::writeToFile ( pChnFlipCln, <span class="Constant">&quot;afterFlip_&quot;</span>+oss.str()+<span class="Constant">&quot;.pdb&quot;</span> );
+
+              GenTrialPositions_AtChi( pChnFlipCln-&gt;getResidue( <span class="Constant">0</span> ), chi_idx, Atm_lst );
+
+              pChnFlipCln-&gt;Obliterate(); <span class="Comment">/*</span><span class="Comment">deallocates pChnSmall too </span><span class="Comment">*/</span>
+          }
+      pChnCln-&gt;Obliterate();
+    }
+    pChn-&gt;Obliterate();
+    <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+
+<span class="Type">bool</span> CSideChainSampler::FlipPeptide ( PProtein* pChn, <span class="Type">const</span> FlipDirection isForw, <span class="Type">const</span> <span class="Type">float</span> dAngle )
+{
+   <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = <span class="Constant">3</span>;
+   PAtom *startV, *endV;
+   Vector3 axis;
+
+   <span class="Type">const</span> <span class="Type">int</span> start = (isForw == FlipForward) ? <span class="Constant">0</span> : -<span class="Constant">1</span>;
+
+   PResidue* pPres = pChn-&gt;getResidue ( KNMTCS_SIZE + start );
+   PResidue* pPresp1 = pChn-&gt;getResidue ( KNMTCS_SIZE + start + <span class="Constant">1</span> );
+
+   startV = pPres-&gt;getAtom ( PID::C_ALPHA );
+   endV = pPresp1-&gt;getAtom ( PID::C_ALPHA );
+   axis = endV-&gt;getPos()-startV-&gt;getPos();
+
+   PBond *pBond = pPresp1-&gt;getBond ( PID::N, PID::C_ALPHA );
+
+   MyRotater rinit(startV-&gt;getPos(),axis, dAngle);
+
+   pBond-&gt;traverseAtoms(backward, &amp;rinit, pChn, pPres-&gt;getAtom ( PID::C_ALPHA) );
+
+   Matrix3 M = PMath::FindRotationMatrix(endV-&gt;getPos()-startV-&gt;getPos(),DtoR(dAngle));
+   Vector3 P = startV-&gt;getPos()+M*(pPresp1-&gt;getAtom ( PID::N )-&gt;getPos()-startV-&gt;getPos());
+   pPresp1-&gt;getAtom ( PID::N )-&gt;changePosition(P);
+
+<span class="Comment">//   Matrix3 M = PMath::FindRotationMatrix(res-&gt;getAtomPosition(rotList[2])-res-&gt;getAtomPosition(rotList[1]),-(toRotate)*M_PI/180.0);</span>
+<span class="Comment">//   Vector3 P = res-&gt;getAtomPosition(rotList[2])+M*(res-&gt;getAtomPosition(rotList[3])-res-&gt;getAtomPosition(rotList[2]));</span>
+<span class="Comment">//   res-&gt;getAtom(rotList[3])-&gt;changePosition(P);</span>
+
+   <span class="Comment">//pBond-&gt;traverseChainToNextDOF(forward, &amp;rinit,NULL, pChn, pChn-&gt;GetDOFs(PID::BACKBONE) );</span>
+
+   <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+
+<span class="Comment">/*</span><span class="Comment"> Sample CB position by rotating along phi (forward) and psi (backward).</span>
+<span class="Comment"> * This method deforms the N-CA-C-CB tetrahedron.</span>
+<span class="Comment"> </span><span class="Comment">*/</span>
+<span class="Type">bool</span> CSideChainSampler::SampleCB ( PProteinResidue* pPres, std::vector&lt;clipper::Atom_list&gt;&amp; Atm_lst )
+{
+  <span class="Statement">if</span> ( pPres-&gt;getName()==PID::GLY )
+  {
+    Atm_lst.push_back ( GetAtoms ( pPres, <span class="Constant">true</span> ) );
+    <span class="Statement">return</span> <span class="Constant">true</span>;
+  }
+
+  <span class="Type">const</span> <span class="Type">float</span> dAngle = <span class="Constant">5.0</span>;
+  PAtom *startV, *endV;
+  Vector3 axis[<span class="Constant">2</span>];
+  vector&lt;PProtein*&gt; temp_Lps;
+
+  startV = pPres-&gt;getAtom ( PID::C_ALPHA );
+  endV = pPres-&gt;getAtom ( PID::N );
+  axis[<span class="Constant">0</span>] = endV-&gt;getPos()-startV-&gt;getPos();
+  axis[<span class="Constant">1</span>] = pPres-&gt;getAtom ( PID::C ) - startV;
+
+  PBond *pBond = pPres-&gt;getBond ( PID::C_ALPHA, PID::C_BETA );
+
+  MyRotater rinit1(startV-&gt;getPos(),axis[<span class="Constant">0</span>], -<span class="Constant">5.0</span>);
+  MyRotater rinit2(startV-&gt;getPos(),axis[<span class="Constant">1</span>], -<span class="Constant">5.0</span>);
+  pBond-&gt;traverseAtoms(forward, &amp;rinit1, pPres-&gt;getChain());
+  pBond-&gt;traverseAtoms(forward, &amp;rinit2, pPres-&gt;getChain());
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> d1=<span class="Constant">0</span>; d1&lt;<span class="Constant">3</span>; d1++ )
+  {
+    <span class="Statement">for</span> ( <span class="Type">int</span> d2=<span class="Constant">0</span>; d2&lt;<span class="Constant">3</span>; d2++ )
+    {
+      GenTrialPositions( pPres, Atm_lst );
+<span class="Comment">//      std::ostringstream oss;</span>
+<span class="Comment">//      oss &lt;&lt; d1;</span>
+<span class="Comment">//      std::ostringstream oss1;</span>
+<span class="Comment">//      oss1 &lt;&lt; d2;</span>
+<span class="Comment">//      PDBIO::writeToFile( pPres-&gt;getChain ( ), &quot;SampleCB1&quot;+oss.str()+&quot;_&quot;+oss1.str()+&quot;.pdb&quot; );</span>
+      MyRotater r2(endV-&gt;getPos(),axis[<span class="Constant">1</span>], dAngle);
+      pBond-&gt;traverseAtoms(forward, &amp;r2, pPres-&gt;getChain());
+    }
+    MyRotater rr(endV-&gt;getPos(),axis[<span class="Constant">1</span>], -<span class="Constant">3</span>*dAngle);
+    pBond-&gt;traverseAtoms(forward, &amp;rr, pPres-&gt;getChain());
+
+    MyRotater r1(endV-&gt;getPos(),axis[<span class="Constant">0</span>], dAngle);
+    pBond-&gt;traverseAtoms(forward, &amp;r1, pPres-&gt;getChain());
+  }
+<span class="Comment">//    for ( int d2=0; d2&lt;3; d2++ )</span>
+<span class="Comment">//    {</span>
+<span class="Comment">//      //temp_Lps.push_back(in_Lps[i]-&gt;Clone());</span>
+<span class="Comment">//      pBond-&gt;traverseAtoms(dir, &amp;r, pres-&gt;getChain());</span>
+<span class="Comment">//    }  </span>
+  <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+<span class="Comment">//void CSideChainSampler::RotamerApply(PResidue *res, const vector&lt;Real&gt; &amp;rotamer)</span>
+<span class="Comment">//{</span>
+<span class="Comment">//  //if (res-&gt;getName()==PID::PRO) return;</span>
+<span class="Comment">//  //see how many chi angles in this give residue.</span>
+<span class="Comment">//  unsigned chiMax = PResources::numChiIndices(res-&gt;getName());</span>
+<span class="Comment">//  //store the name of atoms that defines the chi angle.</span>
+<span class="Comment">//  vector&lt;string&gt; rotList;</span>
+<span class="Comment">//  //current dihedral angl.</span>
+<span class="Comment">//  Real curDihedral;</span>
+<span class="Comment">//  //amount to rotate.</span>
+<span class="Comment">//  Real toRotate;</span>
+<span class="Comment">//  //apply rotamer angles</span>
+<span class="Comment">//  for(unsigned i = 1; i&lt;=chiMax; i++)</span>
+<span class="Comment">//  {</span>
+<span class="Comment">//    //get the atoms used to define dihedral angles</span>
+<span class="Comment">//    rotList = PResources::GetChiIndex(res-&gt;getName(), i);</span>
+<span class="Comment">//    //calculate current dihedral angle (chi angle) and calculate the delta needed to achive the goal.</span>
+<span class="Comment">//    curDihedral = PMath::AngleBetweenPlanes(res-&gt;getAtomPosition(rotList[0]), res-&gt;getAtomPosition(rotList[1]), res-&gt;getAtomPosition(rotList[2]), res-&gt;getAtomPosition(rotList[3]));</span>
+<span class="Comment">//    toRotate = ((rotamer[i-1])-curDihedral);</span>
+<span class="Comment">//    res-&gt;getDOF(&quot;sidechain&quot;,rotList[1],rotList[2])-&gt;Rotate(forward,(-toRotate));</span>
+<span class="Comment">//  }</span>
+<span class="Comment">//}</span>
+
+<span class="Type">void</span> CSideChainSampler::RotamerApply(PResidue *res, <span class="Type">const</span> vector&lt;Real&gt; &amp;rotamer)
+{
+  <span class="Comment">//if (res-&gt;getName()==PID::PRO) return;</span>
+  <span class="Comment">//see how many chi angles in this give residue.</span>
+  <span class="Type">unsigned</span> chiMax = PResources::numChiIndices(res-&gt;getName());
+  <span class="Comment">//store the name of atoms that defines the chi angle.</span>
+  <span class="Statement">for</span>(<span class="Type">unsigned</span> i = <span class="Constant">1</span>; i&lt;=chiMax; i++)
+    SetChi ( res, i, rotamer[i-<span class="Constant">1</span>] );
+}
+
+<span class="Type">void</span> CSideChainSampler::SetChi ( PResidue *res, <span class="Type">const</span> <span class="Type">int</span> chi_idx <span class="Comment">/*</span><span class="Comment">1 &lt;= chiMax</span><span class="Comment">*/</span>, <span class="Type">const</span> Real chi )
+{
+  vector&lt;string&gt; rotList;
+  Real curDihedral, toRotate;
+
+  rotList = PResources::GetChiIndex(res-&gt;getName(), chi_idx );
+
+  curDihedral = PMath::AngleBetweenPlanes(res-&gt;getAtomPosition(rotList[<span class="Constant">0</span>]), res-&gt;getAtomPosition(rotList[<span class="Constant">1</span>]), res-&gt;getAtomPosition(rotList[<span class="Constant">2</span>]), res-&gt;getAtomPosition(rotList[<span class="Constant">3</span>]));
+  toRotate = (chi-curDihedral);
+
+  <span class="Statement">if</span> (res-&gt;getName()==PID::PRO)
+  {
+    Matrix3 M = PMath::FindRotationMatrix(res-&gt;getAtomPosition(rotList[<span class="Constant">2</span>])-res-&gt;getAtomPosition(rotList[<span class="Constant">1</span>]),-(toRotate)*<span class="Constant">M_PI</span>/<span class="Constant">180.0</span>);
+    Vector3 P = res-&gt;getAtomPosition(rotList[<span class="Constant">2</span>])+M*(res-&gt;getAtomPosition(rotList[<span class="Constant">3</span>])-res-&gt;getAtomPosition(rotList[<span class="Constant">2</span>]));
+    res-&gt;getAtom(rotList[<span class="Constant">3</span>])-&gt;changePosition(P);
+  }
+  <span class="Statement">else</span>
+    res-&gt;getDOF(<span class="Constant">&quot;sidechain&quot;</span>,rotList[<span class="Constant">1</span>],rotList[<span class="Constant">2</span>])-&gt;Rotate(forward,(-toRotate));
+}
+
+<span class="Type">void</span> CSideChainSampler::SetTFactor ( PResidue *res, <span class="Type">const</span> Real TempFactor )
+{
+  <span class="Type">const</span> Real dT = <span class="Constant">0.09</span>*TempFactor;
+  <span class="Comment">//if (res-&gt;getName()==PID::PRO) return;</span>
+  <span class="Comment">//see how many chi angles in this give residue.</span>
+  <span class="Type">unsigned</span> chiMax = PResources::numChiIndices(res-&gt;getName());
+  <span class="Comment">//store the name of atoms that defines the chi angle.</span>
+  vector&lt;string&gt; rotList;
+  <span class="Comment">//amount to rotate.</span>
+  <span class="Statement">for</span>(<span class="Type">unsigned</span> i = <span class="Constant">1</span>; i&lt;=chiMax; i++)
+  {
+    MyTSetter mTSetter(TempFactor + i*dT + <span class="Constant">0.09</span>*TempFactor*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>));
+    <span class="Comment">//get the atoms used to define dihedral angles</span>
+    rotList = PResources::GetChiIndex(res-&gt;getName(), i);
+    <span class="Comment">//calculate current dihedral angle (chi angle) and calculate the delta needed to achive the goal.</span>
+    res-&gt;getDOF(<span class="Constant">&quot;sidechain&quot;</span>,rotList[<span class="Constant">1</span>],rotList[<span class="Constant">2</span>])-&gt;traverseAtoms(forward, &amp;mTSetter, res-&gt;getChain());
+  }
+  res-&gt;getAtom (PID::C_BETA)-&gt;setTempFactor ( TempFactor + dT*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>) );
+  res-&gt;getAtom (PID::O)-&gt;setTempFactor ( TempFactor + dT*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>) );
+}
+
+<span class="Type">void</span> CSideChainSampler::SetTFactor ( PResidue *res, <span class="Type">const</span> Real TempFactor, <span class="Type">const</span> <span class="Type">int</span> chi_idx )
+{
+  <span class="Type">const</span> Real dT = <span class="Constant">0.09</span>*TempFactor;
+  <span class="Comment">//if (res-&gt;getName()==PID::PRO) return;</span>
+  <span class="Comment">//see how many chi angles in this give residue.</span>
+  <span class="Type">unsigned</span> chiMax = PResources::numChiIndices(res-&gt;getName());
+  <span class="Comment">//store the name of atoms that defines the chi angle.</span>
+  vector&lt;string&gt; rotList;
+  <span class="Comment">//amount to rotate.</span>
+  <span class="Statement">for</span>(<span class="Type">unsigned</span> i = chi_idx; i&lt;=chiMax; i++)
+  {
+    MyTSetter mTSetter(TempFactor + i*dT + <span class="Constant">0.09</span>*TempFactor*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>));
+    <span class="Comment">//get the atoms used to define dihedral angles</span>
+    rotList = PResources::GetChiIndex(res-&gt;getName(), i);
+    <span class="Comment">//calculate current dihedral angle (chi angle) and calculate the delta needed to achive the goal.</span>
+    res-&gt;getDOF(<span class="Constant">&quot;sidechain&quot;</span>,rotList[<span class="Constant">1</span>],rotList[<span class="Constant">2</span>])-&gt;traverseAtoms(forward, &amp;mTSetter, res-&gt;getChain());
+  }
+  <span class="Statement">if</span> (chi_idx == <span class="Constant">1</span>)
+  {
+    res-&gt;getAtom (PID::C_BETA)-&gt;setTempFactor ( TempFactor + <span class="Constant">0.09</span>*TempFactor*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>) );
+    res-&gt;getAtom (PID::O)-&gt;setTempFactor ( TempFactor + <span class="Constant">0.09</span>*TempFactor*((<span class="Type">double</span>)rand()/<span class="Constant">RAND_MAX</span>-<span class="Constant">0.5</span>) );
+  }
+}
+
+<span class="Type">void</span> CSideChainSampler::SampleRotamerNeighborhood (<span class="Type">const</span> PResidue *res, <span class="Type">const</span> vector&lt;Real&gt; &amp;rotamer, vector&lt;vector&lt;Real&gt; &gt;&amp; rotamer_nbrhd )
+{
+
+  <span class="Type">const</span> <span class="Type">double</span> delta = <span class="Constant">10.</span>;
+  <span class="Type">const</span> <span class="Type">int</span> SAMPLE_SIZE = <span class="Constant">5</span>;
+  vector&lt;Real&gt; rotamer_delta[SAMPLE_SIZE];
+
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=-<span class="Constant">2</span>; i&lt;<span class="Constant">3</span>; i++ )
+    rotamer_delta[i+<span class="Constant">2</span>] = std::vector&lt;Real&gt; ( rotamer.size(), i*delta );
+
+<span class="Comment">/*</span>
+<span class="Comment">  const double delta = 10;</span>
+<span class="Comment">  const int SAMPLE_SIZE = 7;</span>
+<span class="Comment">  vector&lt;Real&gt; rotamer_delta[SAMPLE_SIZE];</span>
+<span class="Comment">  </span>
+<span class="Comment">  for ( int i=-3; i&lt;4; i++ )</span>
+<span class="Comment">    rotamer_delta[i+3] = std::vector&lt;Real&gt; ( rotamer.size(), i*delta );</span>
+<span class="Comment">*/</span>
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;SAMPLE_SIZE; i++ )
+  {
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;rotamer.size(); ++j )
+    {
+      rotamer_delta[i][j] += rotamer[j];
+      <span class="Comment">//std::cout &lt;&lt; rotamer[j] &lt;&lt; &quot; &quot; &lt;&lt; rotamer_delta[i][j] &lt;&lt; &quot; &quot;;</span>
+    }
+    <span class="Comment">//std::cout &lt;&lt; std::endl;</span>
+  }
+
+  <span class="Comment">//see how many chi angles in this give residue.</span>
+  <span class="Type">unsigned</span> chiMax = PResources::numChiIndices(res-&gt;getName());
+  <span class="Statement">if</span> ( chiMax &gt; <span class="Constant">4</span> )
+    std::cout &lt;&lt; <span class="Constant">&quot;ERROR: chiMax &gt; 4. Fix needed.&quot;</span> &lt;&lt; std::endl;
+
+  <span class="Comment">//std::cout &lt;&lt; &quot;chiMax = &quot; &lt;&lt; chiMax &lt;&lt; &quot;\n&quot;;</span>
+
+  rotamer_nbrhd.resize ( (<span class="Type">int</span>)pow ( (<span class="Type">float</span>)SAMPLE_SIZE, (<span class="Type">float</span>)chiMax ) );
+<span class="Comment">//  std::cout &lt;&lt; &quot;rotamer_nbrhd = &quot; &lt;&lt; rotamer_nbrhd.size() &lt;&lt; std::endl;</span>
+  <span class="Type">int</span> p=<span class="Constant">0</span>;
+  <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;SAMPLE_SIZE; i++ )
+  {
+    <span class="Statement">if</span> ( chiMax == <span class="Constant">1</span> )
+    {
+      rotamer_nbrhd[p].push_back ( rotamer_delta[i][<span class="Constant">0</span>] );
+      p++;
+      <span class="Statement">continue</span>;
+    }
+    <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>; j&lt;SAMPLE_SIZE; j++ )
+    {
+      <span class="Statement">if</span> ( chiMax == <span class="Constant">2</span> )
+      {
+        rotamer_nbrhd[p].push_back ( rotamer_delta[i][<span class="Constant">0</span>] );
+        rotamer_nbrhd[p].push_back ( rotamer_delta[j][<span class="Constant">1</span>] );
+        p++;
+        <span class="Statement">continue</span>;
+      }
+      <span class="Statement">for</span> ( <span class="Type">int</span> k=<span class="Constant">0</span>; k&lt;SAMPLE_SIZE; k++ )
+      {
+        <span class="Statement">if</span> ( chiMax == <span class="Constant">3</span> )
+        {
+          rotamer_nbrhd[p].push_back ( rotamer_delta[i][<span class="Constant">0</span>] );
+          rotamer_nbrhd[p].push_back ( rotamer_delta[j][<span class="Constant">1</span>] );
+          rotamer_nbrhd[p].push_back ( rotamer_delta[k][<span class="Constant">2</span>] );
+          p++;
+          <span class="Statement">continue</span>;
+        }
+        <span class="Statement">for</span> ( <span class="Type">int</span> l=<span class="Constant">0</span>; l&lt;SAMPLE_SIZE; l++ )
+        {
+          rotamer_nbrhd[p].push_back ( rotamer_delta[i][<span class="Constant">0</span>] );
+          rotamer_nbrhd[p].push_back ( rotamer_delta[j][<span class="Constant">1</span>] );
+          rotamer_nbrhd[p].push_back ( rotamer_delta[k][<span class="Constant">2</span>] );
+          rotamer_nbrhd[p].push_back ( rotamer_delta[l][<span class="Constant">3</span>] );
+          p++;
+        }
+      }
+    }
+  }
+}
+
+<span class="Comment">/*</span><span class="Comment">**** PEPTIDE FLIPS ****</span><span class="Comment">*/</span>
+
+<span class="Type">struct</span> Transformer: AtomFunctor {
+<span class="Statement">public</span>:
+  Transformer(Matrix4 toApply) {
+    m_toApply = toApply;
+    cerr&lt;&lt;toApply&lt;&lt;endl;
+  }
+
+  <span class="Type">void</span> <span class="Statement">operator</span>()(PAtom *atom, PBond *bondFrom) {
+    atom-&gt;ApplyTransform(m_toApply);
+  }
+
+<span class="Statement">private</span>:
+  Matrix4 m_toApply;
+};
+
+<span class="Type">void</span> CSideChainSampler::MakeHTMatrix ( <span class="Type">const</span> Matrix3&amp; rFrame, <span class="Type">const</span> Vector3&amp; org, Matrix4&amp; htMatrix )
+{
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>;i&lt;<span class="Constant">3</span>;++i )
+        <span class="Statement">for</span> ( <span class="Type">int</span> j=<span class="Constant">0</span>;j&lt;<span class="Constant">3</span>;++j )
+            htMatrix.data[i][j] = rFrame.data[i][j];
+
+    Vector3 tmp = rFrame*org;
+
+    tmp *= -<span class="Constant">1</span>;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; ++i)
+       htMatrix.data[<span class="Constant">3</span>][i] = tmp[i];
+    htMatrix.data[<span class="Constant">3</span>][<span class="Constant">3</span>] = <span class="Constant">1</span>;
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; ++i )
+        htMatrix.data[i][<span class="Constant">3</span>] = <span class="Constant">0</span>;
+}
+
+<span class="Comment">/*</span><span class="Comment">Takes atom positions of CA, CA+1 , and O </span><span class="Comment">*/</span>
+<span class="Type">void</span> CSideChainSampler::CoordFrame ( <span class="Type">const</span> Vector3&amp; a,  <span class="Type">const</span> Vector3&amp; b, <span class="Type">const</span> Vector3&amp; c, Matrix3&amp; T, Vector3&amp; org )
+{
+    Vector3 xa, xb, xc;
+    org = a;
+    xa = b - org;
+    xb = c - org;
+
+    Real gs = dot ( xb, xa ) / dot ( xa, xa);
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;<span class="Constant">3</span>; ++i )
+      xb[i] -= gs * xa[i];
+
+    normalize ( xa );
+
+    normalize ( xb );
+
+    xc = cross ( xa, xb );
+
+    normalize(xc);
+
+    T = Matrix3 (xa, xb, xc);
+
+    T.inplaceTranspose();
+
+}
+
+<span class="Type">bool</span> CSideChainSampler::PepCoordFrame ( PProtein* pChn, Matrix3&amp; T, Vector3&amp; org, <span class="Type">const</span> <span class="Type">int</span> resno )
+{
+    <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = resno;
+    PAtom *startV, *endV, *carbonylO;
+
+    PResidue* pPres = pChn-&gt;getResidue ( KNMTCS_SIZE );
+    PResidue* pPresp1 = pChn-&gt;getResidue ( KNMTCS_SIZE + <span class="Constant">1</span> );
+
+    startV = pPres-&gt;getAtom ( PID::C_ALPHA );
+    endV = pPresp1-&gt;getAtom ( PID::C_ALPHA );
+    carbonylO = pPres-&gt;getAtom ( PID::O );
+
+    CoordFrame ( startV-&gt;getPos(), endV-&gt;getPos(), carbonylO-&gt;getPos(), T, org );
+
+    <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+
+<span class="Type">bool</span> CSideChainSampler::FlipTransformPeptide ( PProtein* pChn, <span class="Type">const</span> <span class="Type">double</span> (*FD)[<span class="Constant">4</span>], <span class="Type">const</span> <span class="Type">int</span> resno )
+{
+    <span class="Type">const</span> <span class="Type">int</span> KNMTCS_SIZE = resno;
+    Vector3 refx ( ReferencePeptide[<span class="Constant">0</span>] );
+    Vector3 refy ( ReferencePeptide[<span class="Constant">1</span>] );
+    Vector3 refz ( ReferencePeptide[<span class="Constant">2</span>] );
+
+    <span class="Comment">/*</span><span class="Comment">Transform target onto reference, transform to other cluster center, and transform back</span>
+<span class="Comment">     * T pChnTar = T^{-1}_t2o T_o2r T_c T^{-1}_o2r T_t2o pChnTar</span>
+<span class="Comment">     * /</span>
+
+<span class="Comment">    </span><span class="Error">/</span><span class="Comment">*Compute Transform from Origin to Reference </span><span class="Comment">*/</span>
+
+    Vector3 org_o2r (<span class="Constant">0</span>,<span class="Constant">0</span>,<span class="Constant">0</span>);
+    Matrix3 R_o2r;
+    Matrix4 T_o2r, T_o2rInv;
+
+    CoordFrame ( refx, refy, refz, R_o2r, org_o2r );
+    MakeHTMatrix ( R_o2r, org_o2r, T_o2r );
+    T_o2r.getInverse(T_o2rInv);
+
+    <span class="Comment">/*</span><span class="Comment">Compute Transform from Origin to Reference </span><span class="Comment">*/</span>
+
+    Vector3 org_t2o (<span class="Constant">0</span>,<span class="Constant">0</span>,<span class="Constant">0</span>);
+    Matrix3 R_t2o;
+    Matrix4 T_t2o, T_t2oInv;
+
+    PepCoordFrame ( pChn, R_t2o, org_t2o, resno );
+    MakeHTMatrix ( R_t2o, org_t2o, T_t2o);
+    T_t2o.getInverse(T_t2oInv);
+
+    Matrix4 F1 (FD);
+    F1.inplaceTranspose();
+
+    Matrix4 T = T_t2oInv*T_o2r*F1*T_o2rInv*T_t2o;
+
+    vector&lt;PAtom *&gt; vAtoms;
+    vAtoms.push_back ( pChn-&gt;getResidue(KNMTCS_SIZE)-&gt;getAtom ( PID::N));
+    vAtoms.push_back ( pChn-&gt;getResidue(KNMTCS_SIZE)-&gt;getAtom ( PID::C_ALPHA));
+    vAtoms.push_back ( pChn-&gt;getResidue(KNMTCS_SIZE)-&gt;getAtom ( PID::C));
+    vAtoms.push_back ( pChn-&gt;getResidue(KNMTCS_SIZE)-&gt;getAtom ( PID::O));
+    vAtoms.push_back ( pChn-&gt;getResidue(KNMTCS_SIZE+<span class="Constant">1</span>)-&gt;getAtom ( PID::N));
+
+    <span class="Statement">for</span> ( <span class="Type">int</span> i=<span class="Constant">0</span>; i&lt;vAtoms.size(); ++i )
+    {
+        vAtoms[i]-&gt;ApplyTransform(T);
+    }
+
+<span class="Comment">//    PBond* pB = pChn-&gt;getResidue(KNMTCS_SIZE)-&gt;getBond ( PID::C_ALPHA, PID::C_BETA );</span>
+<span class="Comment">//    Transformer Tformer ( T );</span>
+<span class="Comment">//    pB-&gt;traverseChain ( forward, &amp;Tformer, NULL, pChn );</span>
+
+    <span class="Statement">return</span> <span class="Constant">true</span>;
+}
+<span class="Comment">/*</span><span class="Comment">**** end PEPTIDE FLIPS ****</span><span class="Comment">*/</span>
+</pre>
+</body>
+</html>
+<!-- vim: set foldmethod=manual : -->

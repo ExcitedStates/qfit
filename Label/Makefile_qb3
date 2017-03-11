@@ -1,0 +1,11 @@
+ROOT = /netapp/home/dkeedy/qFit/mmdb-1.23.2.2
+INCDIR = $(ROOT)/include/
+LIBDIR = $(ROOT)/lib/
+LIB = mmdb
+CXX = g++ -g -O2 -msse2 -DMATH_DOUBLE -fno-var-tracking
+ALL: LABEL
+LABEL: Labeling.cpp mtrand.cpp
+	$(CXX) Labeling.cpp mtrand.cpp -I/usr/include/libxml2 -I$(ROOT)/include $(ROOT)/lib/libmmdb.a -L/usr/lib64 -lxml2 -o Label 
+.PHONY: clean
+clean: 
+	rm -f *.o *~

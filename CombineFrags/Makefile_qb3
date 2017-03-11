@@ -1,0 +1,49 @@
+ROOT = /netapp/home/dkeedy/qFit
+CLPR = ${ROOT}/clipper-2.1
+#CCPX = ${CLPR}/ccp4-onlylibs-dev
+MMDB = ${ROOT}/mmdb-1.23.2.2
+FFTW = ${ROOT}/fftw-2.1.5
+
+CDIR = .
+
+ICLPR = ${CLPR}
+LCLPR = ${CLPR}/lib
+#ICCPX = ${CCPX}/include
+#LCCPX = ${CCPX}/lib
+#ISSM = ${CCPX}/lib/ssm
+#LSSM = ${CCPX}/lib
+IMMDB = ${MMDB}/include
+LMMDB = ${MMDB}/lib
+IFFTW = ${FFTW}/include
+LFFTW = ${FFTW}/lib
+ICDIR = ${CDIR}/src
+LCDIR = ${CDIR}/lib
+BCDIR = ${CDIR}/bin
+TDIR = ${CDIR}/tmp
+
+# Options for various setting
+#INC_DIRS = -I${ICLPR} -I${ICCPX} -I${ISSM} -I${ICDIR}
+#LIB_DIRS = -L${LCCPX} -L${LCLPR} -L${LFORT} -L${LSSM} 
+INC_DIRS = -I${ICLPR} -I${IMMDB} -I${IFFTW} -I${ICDIR} 
+LIB_DIRS = -L${LCLPR} -L${LMMDB} -L${LFFTW}
+
+OBJS = ${TDIR}/CRankFrags.o ${TDIR}/main.o
+
+COMPILER = g++
+#CFLAGS = -O3 -march=pentium4 -fomit-frame-pointer -funroll-loops -mfpmath=sse -msse2 # on P4 sse implies sse2
+#CFLAGS = -g # on P4 sse implies sse2
+CFLAGS = -g -O2 -msse2 -DMATH_DOUBLE
+
+CC = ${COMPILER} ${CFLAGS} ${INC_DIRS}
+
+${TDIR}/main.o : ${ICDIR}/main.cpp
+	${CC} -c -fPIC -o $@ ${ICDIR}/main.cpp
+
+${TDIR}/CRankFrags.o : ${ICDIR}/CRankFrags.cpp
+	${CC} -c -fPIC -o $@ ${ICDIR}/CRankFrags.cpp
+
+CombineFrags : ${OBJS}
+	#${CC} ${LIB_DIRS} -o ${BCDIR}/$@ ${OBJS} -lclipper-mmdb -lmmdb -lclipper-ccp4 -lccp4c -lclipper-contrib -lclipper-phs -lclipper-core -lrfftw -lfftw -lmmdb
+	${CC} ${LIB_DIRS} -o ${BCDIR}/$@ ${OBJS} -lclipper-mmdb -lmmdb -lclipper-ccp4 -lclipper-contrib -lclipper-phs -lclipper-core -lrfftw -lfftw -lmmdb
+
+

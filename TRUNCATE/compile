@@ -1,0 +1,2 @@
+icpc -c -xW -I/home/sdcsoftware/linux/CLIPPER_INTEL_1008_RHEL5/clipper -I/home/sdcsoftware/linux/CLIPPER_INTEL_1008_RHEL5/ccp4-6.1.1/include -o idmulti.o idmulti.cpp
+icpc -L/home/sdcsoftware/linux/CLIPPER_INTEL_1008_RHEL5/clipper/lib -L/home/sdcsoftware/linux/CLIPPER_INTEL_1008_RHEL5/ccp4-6.1.1/lib/ idmulti.o -lmmdb -o idmulti

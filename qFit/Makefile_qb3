@@ -1,0 +1,129 @@
+ROOT = /netapp/home/dkeedy/qFit
+
+
+# Directories where we should search for #include'd files
+CGAL_INCLUDE = $(ROOT)/CGAL-4.1/include
+LOOPTK_INCLUDE = $(ROOT)/looptk-2.0.1/src/core $(ROOT)/looptk-2.0.1/src/utils
+#CLIPPER_INCLUDE = $(ROOT)/clipper-2.1/clipper
+CLIPPER_INCLUDE = $(ROOT)/clipper-2.1
+CPLEX_INCLUDE = $(ROOT)/cplex/ILOG/CPLEX_Studio124/cplex/include $(ROOT)/cplex/ILOG/CPLEX_Studio124/concert/include
+GSL_INCLUDE = $(ROOT)/gsl-1.15/include
+#MKL_INCLUDE = /home/sw/intel/Compiler/11.1/072/mkl/include
+#GLUT_INCLUDE = $(ROOT)/looptk_helper/freeglut-2.6.0/include
+GLUI_INCLUDE = $(ROOT)/glui-2.36/src/include/GL
+MMDB_INCLUDE = $(ROOT)/mmdb-1.23.2.2/include
+GPP4_INCLUDE = $(ROOT)/gpp4-1.3.1/include
+MY_INCLUDES = \
+    $(CGAL_INCLUDE) \
+    $(LOOPTK_INCLUDE) \
+    $(CLIPPER_INCLUDE) \
+    $(CPLEX_INCLUDE) \
+    $(GPP4_INCLUDE) \
+    $(GSL_INCLUDE) \
+    $(MKL_INCLUDE) \
+    $(GLUT_INCLUDE) \
+    $(GLUI_INCLUDE) \
+    $(MMDB_INCLUDE) \
+    $(GPP4_INCLUDE)
+
+
+# Directories where we should search for libraries
+CGAL_LIBDIR = $(ROOT)/CGAL-4.1/cmake/platforms/debug/lib
+CLIPPER_LIBDIR = $(ROOT)/clipper-2.1/lib
+CPLEX_LIBDIR = $(ROOT)/cplex/ILOG/CPLEX_Studio124/concert/lib/x86-64_sles10_4.1/static_pic $(ROOT)/cplex/ILOG/CPLEX_Studio124/cplex/lib/x86-64_sles10_4.1/static_pic
+#X_LIBDIR = /usr/X11R6/lib /usr/X11R6/lib/modules/extensions /usr/X11R6/lib64
+#X_LIBDIR = ??? ??? ???
+SYS_LIBDIR = /lib64
+GSL_LIBDIR = $(ROOT)/gsl-1.15/lib
+#MKL_LIBDIR = /home/sw/intel/Compiler/11.1/072/mkl/32
+#GLUT_LIBDIR = $(ROOT)/looptk_helper/freeglut-2.6.0/lib
+MMDB_LIBDIR = $(ROOT)/mmdb-1.23.2.2/lib
+GPP4_LIBDIR = $(ROOT)/gpp4-1.3.1/lib
+FFTW_LIBDIR = $(ROOT)/fftw-2.1.5/lib
+MY_LIBDIRS = \
+    $(CGAL_LIBDIR) \
+    $(CLIPPER_LIBDIR) \
+    $(CPLEX_LIBDIR) \
+    $(X_LIBDIR) \
+    $(SYS_LIBDIR) \
+    $(GSL_LIBDIR) \
+    $(MKL_LIBDIR) \
+    $(GLUT_LIBDIR) \
+    $(MMDB_LIBDIR) \
+    $(GPP4_LIBDIR) \
+    $(FFTW_LIBDIR)
+
+
+# Libraries the program will need
+SYS_LIBS = Xi Xext X11 xml2 
+CLIPPER_LIBS = \
+    clipper-minimol \
+    clipper-mmdb \
+    clipper-phs \
+    clipper-cif \
+    clipper-contrib \
+    clipper-core \
+    clipper-ccp4 \
+    fftw \
+    rfftw \
+    mmdb \
+    m
+CPLEX_LIBS = ilocplex cplex concert
+GLUT_LIBS = glut 
+MMDB_LIBS = mmdb
+#MKL_LIBS = mkl_lapack guide mkl_ia32 
+#GSL_LIBS = gsl gslcblas
+MY_LIBS = \
+    $(SYS_LIBS) \
+    $(CLIPPER_LIBS) \
+    $(CPLEX_LIBS) \
+    $(GLUT_LIBS) \
+    $(MMDB_LIBS)
+    # no $(MKL_LIBS) or $(GSL_LIBS) for some reason
+
+
+# Flags for the compiler and linker
+CXX = gcc
+DEBUG_VAR = -g 
+OPT_VAR = -O2 -msse2 -DMATH_DOUBLE -frounding-math -Wno-deprecated
+CPPFLAGS = \
+    $(DEBUG_VAR) \
+    $(OPT_VAR) \
+    $(CGAL_CXXFLAGS) \
+    $(addprefix -I,$(MY_INCLUDES)) \
+    -I/usr/include/libxml2
+
+
+# Stuff the build targets use directly
+LD_FLAGS = \
+    -pthread \
+    $(ROOT)/looptk-2.0.1/lib/looptk.a \
+    $(CGAL_LIBDIR)/libCGAL.a \
+    $(GSL_LIBDIR)/libgsl.a \
+    $(GSL_LIBDIR)/libgslcblas.a \
+    /usr/lib64/libboost_thread-mt.so \
+    $(addprefix -L, $(MY_LIBDIRS)) \
+    $(addprefix -l,$(MY_LIBS))
+# /usr/lib64/libboost_thread-mt.so replaces
+# /usr/lib64/libboost_thread.a above
+OBJECTS = $(patsubst src/%.cpp, src/%.o, $(wildcard src/*.cpp)) 
+EXECUTABLE = qFit
+
+
+# Build targets
+all: $(EXECUTABLE)
+default: $(EXECUTABLE)
+qFit : $(OBJECTS)
+	$(CXX) -o bin/$@ $(OBJECTS) $(LD_FLAGS)
+reDokkum_frag : $(OBJECTS)
+	$(CXX) -o bin/$@ $(OBJECTS) $(LD_FLAGS)
+docs:
+	./scandoc -i ./default.pl *.h
+	mv *.html $(DOC_DIR)
+ 
+# Cleaning targets
+clean :
+	rm -f src/*.o #resolve
+realclean : clean
+	rm -f $(DOC_DIR)/*.html
+

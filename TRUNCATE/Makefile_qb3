@@ -1,0 +1,19 @@
+MMDB_INCLUDE = /netapp/home/dkeedy/qFit/mmdb-1.23.2.2/include
+CLIPPER_INCLUDE = /netapp/home/dkeedy/qFit/clipper-2.1
+MY_INCLUDE = $(MMDB_INCLUDE) $(CLIPPER_INCLUDE)
+
+MMDB_LIB = /netapp/home/dkeedy/qFit/mmdb-1.23.2.2/lib
+CLIPPER_LIB = /netapp/home/dkeedy/qFit/clipper-2.1/lib
+MY_LIBDIR = $(MMDB_LIB) $(CLIPPER_LIB)
+LIBS = mmdb
+
+CPPFLAGS = $(addprefix -I,$(MY_INCLUDE)) 
+CXX = g++  #gcc
+
+EXE = $(patsubst %.cpp,%,$(wildcard *.cpp))
+
+all: $(EXE)
+
+$(EXE):	
+	$(CXX) $(CPPFLAGS) $(addprefix -L,$(MY_LIBDIR)) $@.cpp $(addprefix -l,$(LIBS)) -o $@
+

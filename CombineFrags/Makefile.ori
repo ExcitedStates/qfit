@@ -1,0 +1,45 @@
+#CLPR=/home/sdcsoftware/linux/CLIPPER_INTEL_0106/
+CLPR=/home/sdcsoftware/linux/CLIPPER_INTEL_0906_GENERIC
+#CLPR=/home/sdcsoftware/linux/CLIPPER_INTEL_0906_RHEL4
+CCPX=${CLPR}/ccp4-onlylibs-dev
+
+INSTDIR=.
+
+ICLPR=${CLPR}/include
+LCLPR=${CLPR}/lib
+ICCPX=${CCPX}/include
+LCCPX=${CCPX}/lib
+ISSM=${CCPX}/lib/ssm
+LSSM=${CCPX}/lib
+IINSTDIR=${INSTDIR}/src
+LINSTDIR=${INSTDIR}/lib
+BINSTDIR=${INSTDIR}/bin
+TDIR=${INSTDIR}/tmp
+
+# Options for various setting
+#-I${ICCTBX} -I${ISCITBXS} -I${ISCITBXB} -I${IBOOST}
+INC_DIRS=-I${ICLPR} -I${ICCPX} -I${ISSM} -I${IINSTDIR}
+LIB_DIRS=-L${LCCPX} -L${LCLPR} -L${LFORT} -L${LSSM} 
+
+OBJS=${TDIR}/CRankFrags.o ${TDIR}/main.o
+
+COMPILER=g++ 
+#CFLAGS = -O3 -march=pentium4 -fomit-frame-pointer -funroll-loops -mfpmath=sse -msse2 # on P4 sse implies sse2
+CFLAGS = -g # on P4 sse implies sse2
+
+ICCOMP=icpc
+#ICCFLAGS= -g
+ICCFLAGS= -g -xW
+
+#CC= ${COMPILER} ${CFLAGS} ${INC_DIRS} 
+CC= ${ICCOMP} ${ICCFLAGS} ${INC_DIRS} 
+C= gcc ${FLAGS} ${INC_DIRS}
+
+${TDIR}/main.o : ${IINSTDIR}/main.cpp
+	${CC} -c -fPIC -o $@ ${IINSTDIR}/main.cpp
+
+${TDIR}/CRankFrags.o : ${IINSTDIR}/CRankFrags.cpp
+	${CC} -c -fPIC -o $@ ${IINSTDIR}/CRankFrags.cpp
+
+CombineFrags : ${OBJS}
+	${CC} ${LIB_DIRS} -o ${BINSTDIR}/$@ ${OBJS} -lclipper-mmdb -lmmdb -lclipper-ccp4 -lccp4c -lclipper-contrib -lclipper-phs -lclipper-core -lrfftw -lfftw 
