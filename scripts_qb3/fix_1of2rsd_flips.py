@@ -90,14 +90,18 @@ if __name__ == "__main__":
               "needs to be split to fix the i to i-1 peptide geometry"
             new_ags = []
             for altloc in prev_rsd_flip_occs:
-              new_atom = N_atom.detached_copy()
-              new_atom.occ = prev_rsd_flip_occs[altloc]
+              #new_atom = N_atom.detached_copy()
+              #new_atom.occ = prev_rsd_flip_occs[altloc]
               # possible TODO: change coordinates?
               new_ag = rg.atom_groups()[0].detached_copy()
               new_ag.altloc = altloc
+              new_ag.occupancy = prev_rsd_flip_occs[altloc]
+              print new_ag.occupancy
               for atom in new_ag.atoms():
                 if atom.name.strip() != "N":
                   new_ag.remove_atom(atom)
+                else:
+                   atom.occ = prev_rsd_flip_occs[altloc]
               new_ags.append(new_ag)
             for new_ag in new_ags:
               rg.append_atom_group(new_ag)
