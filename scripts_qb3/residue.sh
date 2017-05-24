@@ -179,3 +179,4 @@ cd $CURRLOC  # back from TMPLOC to residue (RES_NUM)
 cd ..  # back from residue (RES_NUM) to chain 
 
 echo "done with residue.sh for residue $chain $RES_NUM at `date`" #>> $log
+
