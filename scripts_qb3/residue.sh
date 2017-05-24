@@ -5,8 +5,14 @@ mtz=$2
 chain=$3
 first=$4
 last=$5
+flip_or_noflip=$6
+res_nums_commas=$7
 
-log=$PWD/$SGE_TASK_ID.log
+res_nums_spaces=`echo $res_nums_commas | tr , " "`
+tasks=(0 $res_nums_spaces)
+RES_NUM=${tasks[$SGE_TASK_ID]}
+
+log=$PWD/$RES_NUM.log
 
 ######################  DECIDE IF WE'LL RUN QFIT FOR THIS RESIDUE  ######################
 
@@ -39,33 +45,33 @@ else
 fi
 
 # Second, do the check for this particular residue:
-# make sure this residue number (SGE_TASK_ID) is in the whitelist.
+# make sure this residue number (RES_NUM) is in the whitelist.
 this_res_in_target_list=false
 for resnum in ${residues[@]}; do
-    if [ $resnum -eq $SGE_TASK_ID ]; then
-        echo "$chain $SGE_TASK_ID IS in final target residue list, so running residue.sh" #>> $log
+    if [ $resnum -eq $RES_NUM ]; then
+        echo "$chain $RES_NUM IS in final target residue list, so running residue.sh" #>> $log
         this_res_in_target_list=true
         break
     fi
 done
 if ! $this_res_in_target_list ; then
-    echo "$chain $SGE_TASK_ID NOT in final target residue list, so skipping residue.sh" #>> $log
+    echo "$chain $RES_NUM NOT in final target residue list, so skipping residue.sh" #>> $log
     sleep 5  # give a little time for that ^ echo statement to reach the log file (?)
     exit
 fi
 
 ################################  PREP FOR AND RUN QFIT  ################################
 
-if [ ! -d $SGE_TASK_ID ]; then
-    mkdir $SGE_TASK_ID
+if [ ! -d $RES_NUM ]; then
+    mkdir $RES_NUM
 fi
 
-cp $pdb $SGE_TASK_ID/in.pdb
-cp $mtz $SGE_TASK_ID/in.hkl
-cp ../minocc.txt $SGE_TASK_ID
-cp ../phenix_flags.txt $SGE_TASK_ID
+cp $pdb $RES_NUM/in.pdb
+cp $mtz $RES_NUM/in.hkl
+cp ../minocc.txt $RES_NUM
+cp ../phenix_flags.txt $RES_NUM
 
-cd $SGE_TASK_ID
+cd $RES_NUM
 
 CURRLOC=$PWD # in a ##/ residue directory
 
@@ -95,10 +101,10 @@ resol1000=`echo $resol | awk '{tot=$1*1000}{print tot }'`
 if [ $resol1000 -lt 1450 ]; then
     adp="all"
 else
-    adp="chain $chain and resid $SGE_TASK_ID"
+    adp="chain $chain and resid $RES_NUM"
 fi
 
-paramfile=${chain}${SGE_TASK_ID}adp.params
+paramfile=${chain}${RES_NUM}adp.params
 
 echo "refinement {" > $paramfile
 echo "  electron_density_maps {" >> $paramfile
@@ -119,145 +125,57 @@ echo "  }" >> $paramfile
 echo "}" >> $paramfile
 
 # Get omit map and starting model
-prevresid=$((SGE_TASK_ID-1)) # for a distal dummy selection, so pdbtools works for Gly/Ala
-nextresid=$((SGE_TASK_ID+1)) # not used!
-cp in.pdb in_${chain}${SGE_TASK_ID}.pdb
+prevresid=$((RES_NUM-1)) # for a distal dummy selection, so pdbtools works for Gly/Ala
+nextresid=$((RES_NUM+1)) # not used!
+cp in.pdb in_${chain}${RES_NUM}.pdb
 phenix.pdbtools \
-    in_${chain}${SGE_TASK_ID}.pdb \
-    modify.selection="chain $chain and ( (resseq $SGE_TASK_ID and not ( name n or name ca or name c or name o or name cb ) ) or ( resseq $prevresid and ( name n ) ) )" \
+    in_${chain}${RES_NUM}.pdb \
+    modify.selection="chain $chain and ( (resseq $RES_NUM and not ( name n or name ca or name c or name o or name cb ) ) or ( resseq $prevresid and ( name n ) ) )" \
     modify.occupancies.set=0 \
     stop_for_unknowns=False
-cp in_${chain}${SGE_TASK_ID}.pdb_modified.pdb in_${chain}${SGE_TASK_ID}_modified.pdb
-phenix.refine in.hkl in_${chain}${SGE_TASK_ID}_modified.pdb --overwrite $paramfile \
+cp in_${chain}${RES_NUM}.pdb_modified.pdb in_${chain}${RES_NUM}_modified.pdb
+phenix.refine in.hkl in_${chain}${RES_NUM}_modified.pdb --overwrite $paramfile \
     write_def_file=false write_eff_file=false write_geo_file=false `cat phenix_flags.txt`
 $QFITDIR/TRUNCATE/truncateSC \
-    in_${chain}${SGE_TASK_ID}_modified_refine_001.pdb \
-    in_${chain}${SGE_TASK_ID}_modified_refine_001_trunc.pdb \
+    in_${chain}${RES_NUM}_modified_refine_001.pdb \
+    in_${chain}${RES_NUM}_modified_refine_001_trunc.pdb \
     $chain \
-    $SGE_TASK_ID
+    $RES_NUM
 
-# Decide whether to try flipping this peptide or not based on the secondary structure
-# NB: The CalcSecStructure method in MMDB fails if there are any alt confs!
-phenix.pdbtools \
-    remove_alt_confs=True \
-    stop_for_unknowns=False \
-    in.pdb \
-    output.file_name=in_1conf.pdb
-flip=`$QFITDIR/TRUNCATE/flipornot in_1conf.pdb $chain $SGE_TASK_ID`
-# Provide a placeholder "do not flip" string
-# so that we avoid trying to pass an empty string to another bash script,
-# which would mess up the $1, $2, ... argument interpretation
-if [[ $flip == "" ]]; then
-    flip="DO-NOT-FLIP-PLACEHOLDER-STRING"
+flip="DON'T KNOW YET"
+if [ $flip_or_noflip == "flip" ]; then
+    flip="--flip-peptide"
+elif [ $flip_or_noflip == "noflip" ]; then
+    flip=""
+else
+    echo "WARNING: flip_or_noflip variable for residue $RES_NUM set to something weird (not 'flip' or 'noflip'): $flip_or_noflip"
+    echo "Not flipping, just to be safe..."
+    flip=""
 fi
 
-uname -a > ${chain}${SGE_TASK_ID}resolve.log
-echo `pwd` >> ${chain}${SGE_TASK_ID}resolve.log
+uname -a > ${chain}${RES_NUM}resolve.log
+echo `pwd` >> ${chain}${RES_NUM}resolve.log
 
-# $QFITDIR/qFit/bin/qFit \
-#     $flip \
-#     in_${chain}${SGE_TASK_ID}_modified_refine_001_trunc.pdb \
-#     in_${chain}${SGE_TASK_ID}_modified_refine_001.mtz \
-#     $chain \
-#     $SGE_TASK_ID \
-#     >> ${chain}${SGE_TASK_ID}qFit.log
+echo "Memory usage before running qFit:"
+qstat -f -j $JOB_ID | grep mem | grep "${RES_NUM}:" >> ${chain}${RES_NUM}qFit.log
 
-basepdb=`basename $pdb .pdb`
+$QFITDIR/qFit/bin/qFit \
+    $flip \
+    in_${chain}${RES_NUM}_modified_refine_001_trunc.pdb \
+    in_${chain}${RES_NUM}_modified_refine_001.mtz \
+    $chain \
+    $RES_NUM \
+    >> ${chain}${RES_NUM}qFit.log
 
-tmpstr=`mktemp`
-basestr=`basename $tmpstr`
-jobbase=`echo $basestr | cut -c 1-10`
+echo "Memory usage after running qFit:"
+qstat -f -j $JOB_ID | grep mem | grep "${RES_NUM}:" >> ${chain}${RES_NUM}qFit.log
 
-memfree="1G" # we're fine with nodes with less memory
-if [[ $flip == "--flip-peptide" ]]; then
-    memfree="5G" # request a node with > 4 GB
-fi
+rm *.map *.geo
+rm in.hkl in.pdb
 
-#cp * $CURRLOC
-cp in_${chain}${SGE_TASK_ID}_modified_refine_001_trunc.pdb \
-   in_${chain}${SGE_TASK_ID}_modified_refine_001.mtz \
-   $CURRLOC
-cd $CURRLOC
+cp Res*.pdb *.out *.err *.log $CURRLOC
 
-## If we got the memory requirement ~right, 24 hours should be PLENTY of time for this
-#    -l h_rt=24:0:0 \
+cd $CURRLOC  # back from TMPLOC to residue (RES_NUM)
+cd ..  # back from residue (RES_NUM) to chain 
 
-# Let's try the max time allocation just to be safe
-qsub \
-    -S /bin/bash \
-    -l arch=linux-x64 \
-    -l netapp=1G \
-    -l scratch=1G \
-    -l mem_free=${memfree} \
-    -l h_rt=168:0:0 \
-    -cwd \
-    -o qfit_${chain}${SGE_TASK_ID}.out \
-    -e qfit_${chain}${SGE_TASK_ID}.err \
-    -j n \
-    -N q_${basepdb}_${chain}${SGE_TASK_ID}_${jobbase} \
-    -V \
-    -sync y \
-    $SCRIPTSDIR/qfit.sh \
-        $flip \
-        in_${chain}${SGE_TASK_ID}_modified_refine_001_trunc.pdb \
-        in_${chain}${SGE_TASK_ID}_modified_refine_001.mtz \
-        $chain \
-        $SGE_TASK_ID \
-        ${chain}${SGE_TASK_ID}qFit.log
-
-# wait 'til that's done ("-sync y")...
-# We have to do that ^ because the finish_chain job is waiting for this residue job array
-# to finish -- but it isn't *efffectively* complete until the qfit jobs finish...
-
-#rm in.hkl in.pdb *.map
-
-#cp * $CURRLOC
-#cp Res*.pdb after*.pdb *.log $CURRLOC
-
-#cd $CURRLOC  # back from TMPLOC to residue (SGE_TASK_ID)
-
-cd ..  # back from residue (SGE_TASK_ID) to chain 
-
-echo "done with residue.sh for residue $chain $SGE_TASK_ID at `date`" #>> $log
-
-##########################  CHECK STATUS OF DAISY CHAIN  #########################
-#
-#all_residues_done=true
-#for resnum in ${residues[@]}; do
-#    # qFit makes Res##.pdb for each residue (including Gly) when it's done, 
-#    # but I'm not totally convinced that successfully happens in all edge cases 
-#    # (e.g. weird occupancy combinations), so let's just check that residue.sh 
-#    # has *reported* as being complete for all other residues.  That will be false 
-#    # for residue.sh jobs that are still in progress or failed due to some bug.
-#    done_1_or_0=`grep "done with residue.sh" $resnum.log | wc | awk '{print $1}'`
-#    if [ $done_1_or_0 -eq 0 ]; then
-#        echo "at least one residue ($resnum) not done yet" >> $log
-#        all_residues_done=false
-#        break
-#    fi
-#done
-#
-#if $all_residues_done ; then
-#    biglog=$first-$last.log
-#    for (( resnum=$first; resnum<=$last; resnum++ )); do
-#        cat $resnum.log >> $biglog
-#        rm $resnum.log
-#    done
-#    echo "all residues done! ($SGE_TASK_ID was the last one)" >> $biglog
-#
-#    tmpstr=`mktemp`
-#    basestr=`basename $tmpstr`
-#    jobbase=`echo $basestr | cut -c 1-10`
-#
-#    basepdb=`basename $pdb .pdb`
-#
-#    qsub \
-#        -S /bin/bash \
-#        -l arch=linux-x64,netapp=1G,scratch=1G,mem_free=4G,h_rt=168:0:0 \
-#        -cwd -o finish_chain_${chain}.out -e finish_chain_${chain}.err -j n \
-#        -N fc_${basepdb}${chain}_${jobbase} \
-#        -V \
-#        $SCRIPTSDIR/finish_chain.sh $pdb $mtz $chain $first $last
-#    echo "qsubbed finish_chain.sh for chain $chain at `date`" >> $biglog
-#fi
-#
+echo "done with residue.sh for residue $chain $RES_NUM at `date`" #>> $log

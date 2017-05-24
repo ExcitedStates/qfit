@@ -4,7 +4,7 @@ export LD_LIBRARY_PATH=/netapp/home/dkeedy/qFit/mmdb-1.23.2.2/lib:/netapp/home/d
 export ILOG_LICENSE_FILE=/netapp/home/dkeedy/qFit/cplex/ILOG/CPLEX_Studio124/licenses/LI_en.txt
 export LOOPTK_RESOURCEDIR=/netapp/home/dkeedy/qFit/looptk-2.0.1/resources
 
-export QFITDIR=/netapp/home/dkeedy/qFit/QFIT_2.0/trunk
+export QFITDIR=/netapp/home/dkeedy/qFit/QFIT_2.1/branches/dev-2.1-qb3
 export SCRIPTSDIR=$QFITDIR/scripts_qb3
 
 workdir=""

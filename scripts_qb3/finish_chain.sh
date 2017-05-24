@@ -11,8 +11,8 @@ i=$first
 while [ $i -le $last ]; do
     # Note: qFit makes Res##.pdb with a capital "R"!
     if [[ ! -f $i/Res$i.pdb && ! -f $i/Res.pdb ]]; then
-        echo "qFit output for chain $chain residue $i -- Res$i.pdb -- is missing (!), so taking from input instead for chain $chain final.pdb"
-        echo "qFit output for chain $chain residue $i -- Res$i.pdb -- is missing (!), so taking from input instead for chain $chain final.pdb" >> ../qFit.log
+        echo "qFit output for chain $chain residue $i -- Res$i.pdb -- is missing (!), so taking from input ($pdb) instead for chain $chain final.pdb"
+        echo "qFit output for chain $chain residue $i -- Res$i.pdb -- is missing (!), so taking from input ($pdb) instead for chain $chain final.pdb" >> ../qFit.log
         awk '{if( (substr($0,1,4)=="ATOM" || substr($0,1,6)=="HETATM") && substr($0,22,1)=="'$chain'" && substr($0,23,4)+0=='$i' ) print $0}' $pdb >> all.pdb
     else
         echo "qFit output for chain $chain residue $i -- Res$i.pdb -- is present as expected, so using for chain $chain final.pdb"
