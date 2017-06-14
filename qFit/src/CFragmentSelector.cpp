@@ -306,26 +306,27 @@ void CFragmentSelector::DoFindConfs(
 
    atm_lst.clear();
 
-   for (o_iter=orderings.begin(); o_iter!= orderings.end(); ++o_iter) {
-     atm_lst.push_back ( GetAtoms ( pMMDBChn, lSeqNum, hSeqNum, *o_iter));
+    for (o_iter=orderings.begin(); o_iter!= orderings.end(); ++o_iter) {
+      atm_lst.push_back ( GetAtoms ( pMMDBChn, lSeqNum, hSeqNum, *o_iter));
+    }
 
-     if ( 1.1 < mCSolver.RSLN && mCSolver.RSLN <= 1.4 )
-       a = 0.251;
-     if ( 1.4 < mCSolver.RSLN && mCSolver.RSLN <= 1.6 )
-       a = 0.33;
-     else if ( 1.6 < mCSolver.RSLN/* && mCSolver.RSLN <= 1.8 */)
-       a = 0.34;
-     mCSolver.SetMILPThreshold (a);
-    
+    if ( 1.1 < mCSolver.RSLN && mCSolver.RSLN <= 1.4 )
+      a = 0.251;
+    if ( 1.4 < mCSolver.RSLN && mCSolver.RSLN <= 1.6 )
+      a = 0.33;
+    else if ( 1.6 < mCSolver.RSLN/* && mCSolver.RSLN <= 1.8 */)
+      a = 0.34;
+    mCSolver.SetMILPThreshold (a);
+
     std::vector<int> cho ( atm_lst.size() );
     mCSolver.SetATMS_SIZE ( atm_lst[0].size ( ) );
     mCSolver.CreateMaskMap ( atm_lst );
     occ.clear();
     occ = mCSolver.SetupLPandSolve( atm_lst, cho, MIQP );
-        
+
     pstr resname = pMMDBChn->GetResidue ( lSeqNum, "" )->GetResName ( );
     std::cout << lSeqNum << " " << resname << std::endl;
-    
+
     for ( int seqnum=lSeqNum; seqnum<=hSeqNum; seqnum++ )
       pMMDBChn->GetResidue ( seqnum, "" )->DeleteAllAtoms ( );
 
