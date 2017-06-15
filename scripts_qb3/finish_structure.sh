@@ -18,7 +18,7 @@ mv final.pdb tmp.pdb
 awk '{if(substr($0,18,3) ~ "MET" && substr($0,11,4) ~ "[0-9] SE" ) {gsub("   SE","    S") gsub("SE  "," SD ") } print $0}' tmp.pdb > final.pdb
 rm tmp.pdb
 
-phenix.python ${SCRIPTSDIR}/fix_1of2rsd_flips.py final.pdb
+phenix.python ${SCRIPTSDIR}/fix_pep_flip_geom.py final.pdb
 mv final_fixedPepFlipGeom.pdb final.pdb
 
 phenix.reduce -q final.pdb | grep -v USER > final_eH.pdb

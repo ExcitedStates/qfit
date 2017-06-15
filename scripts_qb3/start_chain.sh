@@ -34,6 +34,9 @@ basepdb=`basename $pdb .pdb`
 # Decide lists of residues for which a flip WILL be attempted (NOT in secondary structure)
 # and will NOT be attempted (IN secondary structure)
 # NB: The CalcSecStructure method in MMDB fails if there are any alt confs!
+# NB: This QB3 version uses the restoflip executable BEFORE the qFit array
+# because we need to decide which nodes (for flip residues) need more memory.
+# By contrast, the Stanford version uses the flipornot executable INSIDE the qFit array.
 ofn=${pdb%.pdb}_noAlts.pdb
 phenix.pdbtools \
     remove_alt_confs=True \
