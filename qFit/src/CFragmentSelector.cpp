@@ -130,7 +130,7 @@ void CFragmentSelector::generate_paths_recursive(
 
 void CFragmentSelector::GetAltLocs (
         const int lowseq, const int highseq, const PCChain pChn, 
-        std::vector<std::vector<char>>& altChars
+        std::vector<std::vector<char> >& altChars
         )
 {
   for ( int seqnum=lowseq; seqnum<=highseq; seqnum++ ) {
